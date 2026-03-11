@@ -1,7 +1,7 @@
 # QOS — Dual-Implementation OS Design Spec
 
 **Date:** 2026-03-11
-**Status:** Approved (Revision 3)
+**Status:** Approved (Revision 4)
 
 ---
 
@@ -343,12 +343,30 @@ typedef struct process {
     thread_t*   threads;          // linked list of threads
     struct process* parent;
     int         exit_code;
+    // Signals
+    sigaction_t sig_handlers[32]; // handlers for signals 1-31 (index = signum)
+    uint32_t    sig_pending;      // bitmap of pending signals
+    uint32_t    sig_blocked;      // bitmap of blocked signals (signal mask)
 } process_t;
 
 // x86-64 saved context (pushed by context_switch.asm)
 typedef struct { uint64_t r15,r14,r13,r12,rbp,rbx,rip,rsp; } cpu_context_t;
 // AArch64 saved context
-typedef struct { uint64_t x19..x28, fp, lr, sp, elr, spsr; } cpu_context_t;
+typedef struct { uint64_t x19_x28[10], fp, lr, sp, elr, spsr; } cpu_context_t;
+
+// Signal handler descriptor (mirrors POSIX struct sigaction)
+typedef struct {
+    void*    sa_handler;   // SIG_DFL(0) / SIG_IGN(1) / handler VA
+    uint32_t sa_flags;     // SA_RESTART | SA_SIGINFO | SA_RESETHAND | SA_NODEFER
+    uint32_t sa_mask;      // additional signals to block during handler
+} sigaction_t;
+
+// Signal alternate stack
+typedef struct {
+    void*    ss_sp;        // base of alternate stack
+    uint32_t ss_flags;     // SS_DISABLE | SS_ONSTACK
+    uint32_t ss_size;      // size in bytes
+} stack_t;
 ```
 
 **Run queue:** `thread_t* run_queues[4]` (one doubly-linked list per priority).
@@ -411,6 +429,13 @@ Syscalls:
   26 pipe(fds[2])              → creates read/write fd pair
   27 chdir(path)
   28 getcwd(buf, size)
+  29 kill(pid, signum)
+  30 sigaction(signum, act*, oldact*)
+  31 sigprocmask(how, set*, oldset*)   → how: SIG_BLOCK|SIG_UNBLOCK|SIG_SETMASK
+  32 sigreturn()               → called by trampoline; restores user context
+  33 sigpending(set*)
+  34 sigsuspend(mask*)         → block until unmasked signal arrives
+  35 sigaltstack(ss*, old_ss*)
 ```
 
 ### Synchronization Primitives (kernel-internal)
@@ -420,6 +445,144 @@ spinlock_t:  atomic test-and-set; irq_save/restore variant for ISR use
 mutex_t:     sleep-based; waiting threads placed on a wait queue, woken by mutex_unlock
 semaphore_t: counter + wait queue; sem_wait / sem_post
 ```
+
+---
+
+## Signals
+
+Full POSIX signals 1-31 (no real-time signals). SIGKILL (9) and SIGSTOP (19)
+cannot be caught, blocked, or ignored.
+
+### Signal Numbers & Default Actions
+
+| Signal | # | Default Action |
+|--------|---|----------------|
+| SIGHUP | 1 | Terminate |
+| SIGINT | 2 | Terminate |
+| SIGQUIT | 3 | Terminate |
+| SIGILL | 4 | Terminate |
+| SIGTRAP | 5 | Terminate |
+| SIGABRT | 6 | Terminate |
+| SIGBUS | 7 | Terminate |
+| SIGFPE | 8 | Terminate |
+| SIGKILL | 9 | Terminate (uncatchable) |
+| SIGUSR1 | 10 | Terminate |
+| SIGSEGV | 11 | Terminate |
+| SIGUSR2 | 12 | Terminate |
+| SIGPIPE | 13 | Terminate |
+| SIGALRM | 14 | Terminate |
+| SIGTERM | 15 | Terminate |
+| SIGCHLD | 17 | Ignore |
+| SIGCONT | 18 | Continue (if stopped) |
+| SIGSTOP | 19 | Stop (uncatchable) |
+| SIGTSTP | 20 | Stop |
+| SIGTTOU | 22 | Stop |
+| SIGTTIN | 21 | Stop |
+
+Signals 16, 23-31: Terminate by default.
+
+### Per-Process Signal State
+
+Stored in `process_t` (see Data Structures):
+- `sig_handlers[32]` — one `sigaction_t` per signal; initialized to SIG_DFL
+- `sig_pending` — bitmap of signals sent but not yet delivered
+- `sig_blocked` — bitmap of currently blocked signals (the signal mask)
+
+Per-thread (added to `thread_t`):
+- `sig_mask_saved` — signal mask saved during signal handler execution
+- `sig_altstack` — alternate signal stack (`stack_t`)
+
+### Signal Delivery
+
+Signals are checked and delivered at two points:
+1. **Return from syscall** to user mode
+2. **Return from IRQ/exception** to user mode (EL0 / CPL3)
+
+Delivery procedure for each pending signal not in `sig_blocked`:
+
+```
+for each signum where (sig_pending & ~sig_blocked) bit is set:
+  clear bit in sig_pending
+  handler = proc->sig_handlers[signum].sa_handler
+  if handler == SIG_IGN: continue
+  if handler == SIG_DFL: apply default action (terminate/stop/ignore/continue)
+  else: set up signal frame and jump to handler
+```
+
+SIGKILL and SIGSTOP are never checked against sig_blocked — they are always delivered
+regardless of mask. SIGSTOP moves the process to Stopped state; SIGCONT wakes it.
+
+### Signal Frame & Trampoline
+
+When delivering to a user handler, the kernel pushes a signal frame onto the user
+stack (or the alternate stack if `SA_ONSTACK` and `sigaltstack` is set):
+
+**x86-64 signal frame (pushed at RSP, 16-byte aligned):**
+```c
+typedef struct {
+    uint64_t      pretcode;      // VA of sigreturn trampoline
+    int           signum;
+    siginfo_t     info;          // si_signo, si_errno, si_code, si_pid, si_addr
+    mcontext_t    mcontext;      // full user register state (all GPRs + rflags + rip)
+    uint32_t      saved_mask;    // process->sig_blocked before this signal
+    uint8_t       _pad[4];
+} sigframe_t;
+```
+
+**AArch64 signal frame:**
+```c
+typedef struct {
+    uint64_t      pretcode;      // VA of sigreturn trampoline
+    int           signum;
+    siginfo_t     info;
+    mcontext_t    mcontext;      // x0-x30, sp, pc, pstate
+    uint32_t      saved_mask;
+    uint8_t       _pad[4];
+} sigframe_t;
+```
+
+After pushing the frame:
+- If `SA_SIGINFO` set: call `handler(signum, &info, &mcontext)`; else `handler(signum)`
+- Set `proc->sig_blocked |= handler->sa_mask | (1 << signum)` (unless `SA_NODEFER`)
+- If `SA_RESETHAND`: reset handler to SIG_DFL after delivery
+
+**Trampoline:** A single read-execute page (`0x0000_7FFF_0000_0000`, mapped into every
+process VAS at `exec()`) contains the sigreturn stubs:
+```asm
+; x86-64 trampoline
+mov rax, 32        ; syscall 32 = sigreturn
+syscall
+
+; AArch64 trampoline
+mov x8, #32
+svc #0
+```
+
+`sigreturn()` in the kernel:
+1. Read `sigframe_t*` from RSP/SP (frame is at current stack pointer)
+2. Restore `mcontext` registers to the thread's saved user context
+3. Restore `saved_mask` to `proc->sig_blocked`
+4. Return to user mode at the restored PC (pre-signal RIP/PC)
+
+### SA_RESTART
+
+If `SA_RESTART` is set on a handler and a syscall is interrupted by that signal,
+the kernel re-executes the syscall instead of returning `EINTR`. Implemented by
+recording a `restarting` flag in the thread and re-entering the syscall dispatch
+on the way back to user mode.
+
+### Signal Inheritance
+
+| Event | Behavior |
+|-------|----------|
+| `fork()` | Child inherits: `sig_handlers`, `sig_blocked`, `sig_pending`, `sig_altstack` |
+| `exec()` | `sig_blocked` preserved; `sig_pending` preserved; all handlers reset to SIG_DFL except SIG_IGN → stays SIG_IGN |
+
+### SIGCHLD & Shell
+
+With full signal support, the shell registers a `SIGCHLD` handler via `sigaction()`
+that calls `waitpid(-1, WNOHANG)` in a loop to reap zombies. This replaces the
+polling approach described in the shell section.
 
 ---
 
@@ -625,6 +788,8 @@ File:     fopen, fclose, fread, fwrite, fseek, ftell, fflush, fileno
 Process:  exit, _exit, getpid, fork, execv, execve, waitpid, abort
 Network:  socket, bind, listen, accept, connect, send, recv, sendto, recvfrom,
           close, htons, htonl, ntohs, ntohl, inet_addr, inet_ntoa
+Signals:  kill, signal, sigaction, sigprocmask, sigpending, sigsuspend,
+          sigaltstack, raise, abort (sends SIGABRT to self)
 Error:    errno (thread-local), strerror, perror
 ```
 
@@ -659,8 +824,9 @@ Features:
   - Pipes: cmd1 | cmd2 → pipe(26) + fork twice + dup2 + exec both sides
   - Built-ins: cd (chdir syscall 27), exit, echo, export (env var table),
                pwd (getcwd syscall 28), unset
-  - Zombie reaping: shell main loop calls waitpid(-1, WNOHANG) before each
-    prompt to reap completed children. No signal delivery — polling only.
+  - Zombie reaping: registers SIGCHLD handler via sigaction(); handler calls
+    waitpid(-1, WNOHANG) in a loop. SIGINT (Ctrl-C) sends SIGINT to foreground
+    process group (simplified: just the current child pid).
   - Prompt: displays current directory (via getcwd), reads line via fgets
 ```
 
@@ -692,8 +858,10 @@ ECONNREFUSED, ETIMEDOUT, EEXIST, ENOTDIR, EISDIR). Libc's syscall wrappers
 set `errno` and return -1 on negative kernel return values.
 
 **Kernel exceptions:** Unhandled CPU exceptions (GPF, double fault, unexpected
-interrupt) call `panic()` with register dump. Page faults in kernel mode panic;
-page faults in user mode deliver SIGSEGV (simplified: terminate the process).
+interrupt) call `panic()` with register dump. Page faults in kernel mode panic.
+Page faults in user mode (with no valid COW mapping) deliver SIGSEGV to the process
+via the normal signal delivery path (which may invoke a user-registered handler or
+terminate by default).
 
 **Driver errors:** Initialization failures (PCI device not found, virtio magic
 mismatch) call `panic()` — the system cannot run without network/storage drivers
@@ -728,6 +896,7 @@ Tests run via `make test-all`; each QEMU instance times out after 30 seconds.
 - POSIX compliance
 - x86 32-bit or ARM 32-bit (secondary targets, not in initial scope)
 - Sound, USB, GPU drivers
-- Signals (no signal delivery mechanism; user-mode faults terminate the process;
-  shell reaps children by polling waitpid, not via SIGCHLD delivery)
+- Real-time signals (SIGRTMIN-SIGRTMAX), signal queuing (sigqueue)
+- Process groups and sessions (no tcsetpgrp, no job control beyond basic SIGCHLD/SIGINT)
+- `sigwaitinfo`, `signalfd`, `eventfd`
 - Demand paging / swap
