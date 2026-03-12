@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+import ctypes
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+QOS_BOOT_MAGIC = 0x514F53424F4F5400
+QOS_PMM_PAGE_NONE = (1 << 64) - 1
+
+
+class MmapEntry(ctypes.Structure):
+    _fields_ = [
+        ("base", ctypes.c_uint64),
+        ("length", ctypes.c_uint64),
+        ("type", ctypes.c_uint32),
+        ("_pad", ctypes.c_uint32),
+    ]
+
+
+class BootInfo(ctypes.Structure):
+    _fields_ = [
+        ("magic", ctypes.c_uint64),
+        ("mmap_entry_count", ctypes.c_uint32),
+        ("_pad0", ctypes.c_uint32),
+        ("mmap_entries", MmapEntry * 128),
+        ("fb_addr", ctypes.c_uint64),
+        ("fb_width", ctypes.c_uint32),
+        ("fb_height", ctypes.c_uint32),
+        ("fb_pitch", ctypes.c_uint32),
+        ("fb_bpp", ctypes.c_uint8),
+        ("_pad1", ctypes.c_uint8 * 3),
+        ("initramfs_addr", ctypes.c_uint64),
+        ("initramfs_size", ctypes.c_uint64),
+        ("acpi_rsdp_addr", ctypes.c_uint64),
+        ("dtb_addr", ctypes.c_uint64),
+    ]
+
+
+def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(args, cwd=ROOT, text=True, capture_output=True)
+
+
+def _build_mm_lib() -> Path:
+    out = ROOT / "c-os/build/libqos_c_mm.so"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    build = _run(
+        [
+            "gcc",
+            "-shared",
+            "-fPIC",
+            "-std=c11",
+            "-O2",
+            "-I",
+            str(ROOT / "c-os"),
+            "-o",
+            str(out),
+            str(ROOT / "c-os/kernel/init_state.c"),
+            str(ROOT / "c-os/kernel/mm/mm.c"),
+        ]
+    )
+    assert build.returncode == 0, f"gcc failed:\n{build.stderr}\nstdout:\n{build.stdout}"
+    return out
+
+
+def _valid_boot_info() -> BootInfo:
+    info = BootInfo()
+    info.magic = QOS_BOOT_MAGIC
+    info.mmap_entry_count = 1
+    info.mmap_entries[0].base = 0x100000
+    info.mmap_entries[0].length = 0x40000  # 64 pages
+    info.mmap_entries[0].type = 1
+    info.initramfs_addr = 0x120000
+    info.initramfs_size = 0x2000  # 2 pages reserved
+    return info
+
+
+def test_c_pmm_init_counts_pages() -> None:
+    lib = ctypes.CDLL(str(_build_mm_lib()))
+    lib.qos_pmm_init.argtypes = [ctypes.POINTER(BootInfo)]
+    lib.qos_pmm_init.restype = ctypes.c_int
+    lib.qos_pmm_total_pages.argtypes = []
+    lib.qos_pmm_total_pages.restype = ctypes.c_uint32
+    lib.qos_pmm_free_pages.argtypes = []
+    lib.qos_pmm_free_pages.restype = ctypes.c_uint32
+
+    info = _valid_boot_info()
+    assert lib.qos_pmm_init(ctypes.byref(info)) == 0
+    assert lib.qos_pmm_total_pages() == 64
+    assert lib.qos_pmm_free_pages() == 62
+
+
+def test_c_pmm_alloc_and_free_round_trip() -> None:
+    lib = ctypes.CDLL(str(_build_mm_lib()))
+    lib.qos_pmm_init.argtypes = [ctypes.POINTER(BootInfo)]
+    lib.qos_pmm_init.restype = ctypes.c_int
+    lib.qos_pmm_alloc_page.argtypes = []
+    lib.qos_pmm_alloc_page.restype = ctypes.c_uint64
+    lib.qos_pmm_free_page.argtypes = [ctypes.c_uint64]
+    lib.qos_pmm_free_page.restype = ctypes.c_int
+    lib.qos_pmm_free_pages.argtypes = []
+    lib.qos_pmm_free_pages.restype = ctypes.c_uint32
+
+    info = _valid_boot_info()
+    assert lib.qos_pmm_init(ctypes.byref(info)) == 0
+    before = lib.qos_pmm_free_pages()
+    page = lib.qos_pmm_alloc_page()
+    assert page != QOS_PMM_PAGE_NONE
+    assert lib.qos_pmm_free_pages() == before - 1
+    assert lib.qos_pmm_free_page(page) == 0
+    assert lib.qos_pmm_free_pages() == before
+
+
+def test_c_pmm_alloc_returns_explicit_none_when_exhausted() -> None:
+    lib = ctypes.CDLL(str(_build_mm_lib()))
+    lib.qos_pmm_init.argtypes = [ctypes.POINTER(BootInfo)]
+    lib.qos_pmm_init.restype = ctypes.c_int
+    lib.qos_pmm_alloc_page.argtypes = []
+    lib.qos_pmm_alloc_page.restype = ctypes.c_uint64
+    lib.qos_pmm_free_pages.argtypes = []
+    lib.qos_pmm_free_pages.restype = ctypes.c_uint32
+
+    info = _valid_boot_info()
+    assert lib.qos_pmm_init(ctypes.byref(info)) == 0
+    free_pages = lib.qos_pmm_free_pages()
+    assert free_pages > 0
+    for _ in range(free_pages):
+        assert lib.qos_pmm_alloc_page() != QOS_PMM_PAGE_NONE
+    assert lib.qos_pmm_alloc_page() == QOS_PMM_PAGE_NONE

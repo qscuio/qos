@@ -1,0 +1,13 @@
+[package]
+name = "qos-userspace"
+version = "0.1.0"
+edition = "2021"
+default-run = "qos-sh"
+
+[dependencies]
+qos-boot = { path = "../boot" }
+qos-kernel = { path = "../kernel" }
+
+[[bin]]
+name = "qos-sh"
+path = "src/main.rs"

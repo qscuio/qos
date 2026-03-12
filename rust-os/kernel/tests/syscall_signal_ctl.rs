@@ -1,0 +1,80 @@
+use qos_boot::boot_info::{BootInfo, MmapEntry, QOS_BOOT_MAGIC};
+use qos_kernel::{
+    kernel_entry, proc_create, proc_signal_mask, syscall_dispatch, QOS_SIGKILL, QOS_SIGUSR1,
+    QOS_SIGUSR2, QOS_SIG_IGN, SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK, SYSCALL_NR_SIGACTION,
+    SYSCALL_NR_SIGPROCMASK,
+};
+use std::sync::{Mutex, OnceLock};
+
+fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(())).lock().expect("mutex poisoned")
+}
+
+fn valid_boot_info() -> BootInfo {
+    let mut info = BootInfo::default();
+    info.magic = QOS_BOOT_MAGIC;
+    info.mmap_entry_count = 1;
+    info.mmap_entries[0] = MmapEntry {
+        base: 0x100000,
+        length: 0x200000,
+        type_: 1,
+        _pad: 0,
+    };
+    info.initramfs_addr = 0x400000;
+    info.initramfs_size = 0x1000;
+    info
+}
+
+fn bit(signum: u32) -> u32 {
+    1u32 << signum
+}
+
+#[test]
+fn syscall_sigaction_and_sigprocmask_bridge() {
+    let _guard = test_guard();
+    let info = valid_boot_info();
+    assert!(kernel_entry(&info).is_ok());
+    assert!(proc_create(7, 0));
+
+    assert_eq!(syscall_dispatch(SYSCALL_NR_SIGACTION, 7, QOS_SIGUSR1 as u64, u64::MAX, 0), 0);
+    assert_eq!(
+        syscall_dispatch(SYSCALL_NR_SIGACTION, 7, QOS_SIGUSR1 as u64, QOS_SIG_IGN as u64, 0),
+        0
+    );
+    assert_eq!(
+        syscall_dispatch(SYSCALL_NR_SIGACTION, 7, QOS_SIGUSR1 as u64, u64::MAX, 0),
+        QOS_SIG_IGN as i64
+    );
+    assert_eq!(
+        syscall_dispatch(SYSCALL_NR_SIGACTION, 7, QOS_SIGKILL as u64, 0x1234, 0),
+        -1
+    );
+
+    assert_eq!(
+        syscall_dispatch(SYSCALL_NR_SIGPROCMASK, 7, SIG_SETMASK as u64, bit(QOS_SIGUSR1) as u64, 0),
+        0
+    );
+    assert_eq!(
+        syscall_dispatch(SYSCALL_NR_SIGPROCMASK, 7, SIG_BLOCK as u64, bit(QOS_SIGUSR2) as u64, 0),
+        bit(QOS_SIGUSR1) as i64
+    );
+    assert_eq!(
+        proc_signal_mask(7),
+        Some(bit(QOS_SIGUSR1) | bit(QOS_SIGUSR2))
+    );
+
+    assert_eq!(
+        syscall_dispatch(
+            SYSCALL_NR_SIGPROCMASK,
+            7,
+            SIG_UNBLOCK as u64,
+            bit(QOS_SIGUSR1) as u64,
+            0
+        ),
+        (bit(QOS_SIGUSR1) | bit(QOS_SIGUSR2)) as i64
+    );
+    assert_eq!(proc_signal_mask(7), Some(bit(QOS_SIGUSR2)));
+
+    assert_eq!(syscall_dispatch(SYSCALL_NR_SIGPROCMASK, 7, 99, 0, 0), -1);
+}

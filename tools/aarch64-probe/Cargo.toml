@@ -1,0 +1,14 @@
+[package]
+name = "qos_aarch64_probe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+qos-boot = { path = "../../rust-os/boot" }
+qos-kernel = { path = "../../rust-os/kernel" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+.pytest_cache/
+
+# C scaffold build outputs
+c-os/build/
+
+# Rust build outputs
+rust-os/build/
+rust-os/target/
+
+# QEMU local images
+qemu/configs/*.img
+qemu/configs/*.qcow2
+
+# Local logs
+*.log

@@ -65,8 +65,8 @@ itself. Sizes are generous to avoid revisiting.
 |-------------|-----------|-----------|-------|
 | Stage 1     | 0         | 1 sector  | MBR (512 bytes) |
 | Stage 2     | 1         | 127 sectors | Max ~63 KB; fits in low memory |
-| Kernel ELF  | 128       | 1024 sectors | Max ~512 KB |
-| initramfs   | 1152      | 4096 sectors | Max ~2 MB CPIO archive |
+| Kernel ELF  | 128       | 4096 sectors | Max ~2 MB |
+| initramfs   | 4224      | 4096 sectors | Max ~2 MB CPIO archive |
 
 Stage 1 reads Stage 2 using BIOS int 13h (CHS or LBA extension). Stage 2 reads
 the kernel ELF header, then loads PT_LOAD segments. Stage 2 then reads the initramfs
@@ -140,9 +140,9 @@ Stage 2 (C / Rust, loaded at 0x9000)
   - Enter 32-bit protected mode (set up GDT with flat 32-bit CS/DS)
   - Enable PAE paging: set up PML4 + PDPT + PD identity-mapping first 4 GB
   - Enable 64-bit long mode (set EFER.LME, load 64-bit GDT)
-  - Read kernel ELF from LBA 128 using in-protected-mode disk I/O (port I/O ATA PIO)
+  - Read kernel ELF from LBA 128 using ATA PIO (legacy I/O ports in long mode)
   - Map kernel PT_LOAD segments at their link addresses (0xFFFFFFFF80000000+)
-  - Read initramfs from LBA 1152
+  - Read initramfs from LBA 4224
   - Build boot_info at 0x7000 (below Stage 1, safe in low memory)
   - Jump to kernel_main(boot_info*) in long mode
 
@@ -185,6 +185,8 @@ Generic Timer: EL1 physical timer, IRQ 30 (PPI).
 ```sh
 qemu-system-aarch64 -machine virt -cpu cortex-a57 \
   -kernel boot.elf -initrd initramfs.cpio \
+  -drive if=none,file=disk.img,format=raw,id=disk0 \
+  -device virtio-blk-device,drive=disk0 \
   -netdev user,id=net0 -device virtio-net-device,netdev=net0 \
   -serial stdio -display none -m 256M
 ```
@@ -333,6 +335,7 @@ typedef struct thread {
     void*       kernel_stack;     // 8 KB kernel stack (kmalloc'd)
     cpu_context_t ctx;            // saved register context (see below)
     struct thread* next;          // run queue linkage
+    struct thread* prev;          // run queue linkage
 } thread_t;
 
 // Process control block
@@ -404,7 +407,7 @@ Syscalls:
   1  exec(path, argv, envp)
   2  exit(code)
   3  getpid()
-  4  wait(pid, status*)
+  4  waitpid(pid, status*, options)   → supports pid = -1 and WNOHANG
   5  open(path, flags, mode)
   6  read(fd, buf, len)
   7  write(fd, buf, len)
@@ -575,8 +578,8 @@ on the way back to user mode.
 
 | Event | Behavior |
 |-------|----------|
-| `fork()` | Child inherits: `sig_handlers`, `sig_blocked`, `sig_pending`, `sig_altstack` |
-| `exec()` | `sig_blocked` preserved; `sig_pending` preserved; all handlers reset to SIG_DFL except SIG_IGN → stays SIG_IGN |
+| `fork()` | Child inherits: `sig_handlers`, `sig_blocked`, `sig_altstack`; `sig_pending` starts empty |
+| `exec()` | `sig_blocked` preserved; `sig_pending` cleared; all handlers reset to SIG_DFL except SIG_IGN → stays SIG_IGN |
 
 ### SIGCHLD & Shell
 
@@ -662,7 +665,7 @@ invalidated on `mkdir`/`unlink` in the same directory.
 | initramfs  | `/`         | CPIO newc format, embedded. Read-only. Contains shell + initial binaries. |
 | tmpfs      | `/tmp`      | In-memory. Backed by kmalloc'd pages. Not persistent. |
 | procfs     | `/proc`     | Dedicated driver (not tmpfs). Provides `/proc/<pid>/status`, `/proc/meminfo`. |
-| ext2       | `/data`     | On QEMU virtio-blk disk image. Writable. Write-through cache. |
+| ext2       | `/data`     | On QEMU block disk image (`if=ide` on x86-64, `virtio-blk` on AArch64). Writable. Write-through cache. |
 
 ### initramfs Format & Embedding
 
@@ -701,10 +704,10 @@ Each filesystem is a separate module. Unsafe is isolated to raw disk I/O.
 
 ### Drivers
 
-| Architecture | NIC        | QEMU flag | Bus |
-|--------------|------------|-----------|-----|
-| x86-64       | e1000      | `-device e1000` | PCI |
-| AArch64      | virtio-net | `-device virtio-net-device` | MMIO |
+| Architecture | Network NIC | Storage Block Device | QEMU flags |
+|--------------|-------------|----------------------|------------|
+| x86-64       | e1000 (PCI) | IDE (ATA PIO)        | `-device e1000` + `-drive ...,if=ide` |
+| AArch64      | virtio-net (MMIO) | virtio-blk (MMIO) | `-device virtio-net-device` + `-device virtio-blk-device` |
 
 **e1000 (PCI, x86-64):**
 - Enumerate PCI bus via port I/O (CONFIG_ADDRESS 0xCF8 / CONFIG_DATA 0xCFC)
@@ -724,6 +727,10 @@ Each filesystem is a separate module. Unsafe is isolated to raw disk I/O.
   set FEATURES_OK → set up virtqueues (RX queue 0, TX queue 1, 16 descriptors each,
   split-queue format) → set DRIVER_OK
 - Virtqueue: split-queue format, 16 descriptors each
+
+**Block storage:**
+- x86-64: ATA PIO via primary IDE channel (I/O ports `0x1F0-0x1F7`, control `0x3F6`)
+- AArch64: virtio-blk MMIO device discovered via DTB `/virtio_mmio@...` nodes (DeviceID `2`)
 
 **UART (serial console, both architectures):**
 - x86-64: 16550 at I/O port 0x3F8, 115200 baud, polling for early output, IRQ-driven after
