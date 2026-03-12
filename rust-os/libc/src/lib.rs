@@ -29,6 +29,18 @@ const SYSCALL_NR_CONNECT: u32 = 18;
 const SYSCALL_NR_SEND: u32 = 19;
 #[cfg(target_os = "none")]
 const SYSCALL_NR_RECV: u32 = 20;
+#[cfg(target_os = "none")]
+const SYSCALL_NR_DLOPEN: u32 = 36;
+#[cfg(target_os = "none")]
+const SYSCALL_NR_DLCLOSE: u32 = 37;
+#[cfg(target_os = "none")]
+const SYSCALL_NR_DLSYM: u32 = 38;
+#[cfg(target_os = "none")]
+const SYSCALL_NR_MODLOAD: u32 = 39;
+#[cfg(target_os = "none")]
+const SYSCALL_NR_MODUNLOAD: u32 = 40;
+#[cfg(target_os = "none")]
+const SYSCALL_NR_MODRELOAD: u32 = 41;
 
 #[cfg(target_os = "none")]
 #[inline]
@@ -805,6 +817,106 @@ pub unsafe fn qos_waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_i
         let _ = status;
         let _ = options;
         -1
+    }
+}
+
+pub unsafe fn qos_dlopen(path: *const c_char, flags: c_int) -> *mut c_void {
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = path;
+        let _ = flags;
+        core::ptr::null_mut()
+    }
+    #[cfg(target_os = "none")]
+    {
+        if path.is_null() {
+            return core::ptr::null_mut();
+        }
+        let ret = unsafe { qos_syscall4(SYSCALL_NR_DLOPEN, path as u64, flags as u64, 0, 0) };
+        if ret < 0 {
+            core::ptr::null_mut()
+        } else {
+            ret as usize as *mut c_void
+        }
+    }
+}
+
+pub unsafe fn qos_dlclose(handle: *mut c_void) -> c_int {
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = handle;
+        -1
+    }
+    #[cfg(target_os = "none")]
+    {
+        if handle.is_null() {
+            return -1;
+        }
+        let ret = unsafe { qos_syscall4(SYSCALL_NR_DLCLOSE, handle as u64, 0, 0, 0) };
+        if ret < 0 { -1 } else { ret as c_int }
+    }
+}
+
+pub unsafe fn qos_dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void {
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = handle;
+        let _ = symbol;
+        core::ptr::null_mut()
+    }
+    #[cfg(target_os = "none")]
+    {
+        if handle.is_null() || symbol.is_null() {
+            return core::ptr::null_mut();
+        }
+        let ret = unsafe { qos_syscall4(SYSCALL_NR_DLSYM, handle as u64, symbol as u64, 0, 0) };
+        if ret < 0 {
+            core::ptr::null_mut()
+        } else {
+            ret as usize as *mut c_void
+        }
+    }
+}
+
+pub unsafe fn qos_modload(path: *const c_char) -> c_int {
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = path;
+        -1
+    }
+    #[cfg(target_os = "none")]
+    {
+        if path.is_null() {
+            return -1;
+        }
+        let ret = unsafe { qos_syscall4(SYSCALL_NR_MODLOAD, path as u64, 0, 0, 0) };
+        if ret < 0 { -1 } else { ret as c_int }
+    }
+}
+
+pub unsafe fn qos_modunload(module_id: c_int) -> c_int {
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = module_id;
+        -1
+    }
+    #[cfg(target_os = "none")]
+    {
+        let ret = unsafe { qos_syscall4(SYSCALL_NR_MODUNLOAD, module_id as u64, 0, 0, 0) };
+        if ret < 0 { -1 } else { ret as c_int }
+    }
+}
+
+pub unsafe fn qos_modreload(module_id: c_int) -> c_int {
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = module_id;
+        -1
+    }
+    #[cfg(target_os = "none")]
+    {
+        let ret = unsafe { qos_syscall4(SYSCALL_NR_MODRELOAD, module_id as u64, 0, 0, 0) };
+        if ret < 0 { -1 } else { ret as c_int }
     }
 }
 

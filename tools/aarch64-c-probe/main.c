@@ -1,5 +1,8 @@
 #include <stddef.h>
 #include <stdint.h>
+#include <limits.h>
+
+#include "generated/cmd_elves.h"
 
 #include "../../c-os/boot/boot_info.h"
 #include "../../c-os/kernel/init_state.h"
@@ -302,28 +305,19 @@ typedef struct {
     const char *path;
     const uint8_t *image;
     size_t image_len;
+    uint8_t cmd_id;
 } qos_user_elf_t;
 
-static const uint8_t QOS_ELF_IMAGE_ECHO[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_ECHO};
-static const uint8_t QOS_ELF_IMAGE_PS[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_PS};
-static const uint8_t QOS_ELF_IMAGE_PING[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_PING};
-static const uint8_t QOS_ELF_IMAGE_IP[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_IP};
-static const uint8_t QOS_ELF_IMAGE_WGET[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_WGET};
-static const uint8_t QOS_ELF_IMAGE_LS[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_LS};
-static const uint8_t QOS_ELF_IMAGE_CAT[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_CAT};
-static const uint8_t QOS_ELF_IMAGE_TOUCH[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_TOUCH};
-static const uint8_t QOS_ELF_IMAGE_EDIT[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_EDIT};
-
 static const qos_user_elf_t QOS_USER_ELFS[] = {
-    {"/bin/echo", QOS_ELF_IMAGE_ECHO, sizeof(QOS_ELF_IMAGE_ECHO)},
-    {"/bin/ps", QOS_ELF_IMAGE_PS, sizeof(QOS_ELF_IMAGE_PS)},
-    {"/bin/ping", QOS_ELF_IMAGE_PING, sizeof(QOS_ELF_IMAGE_PING)},
-    {"/bin/ip", QOS_ELF_IMAGE_IP, sizeof(QOS_ELF_IMAGE_IP)},
-    {"/bin/wget", QOS_ELF_IMAGE_WGET, sizeof(QOS_ELF_IMAGE_WGET)},
-    {"/bin/ls", QOS_ELF_IMAGE_LS, sizeof(QOS_ELF_IMAGE_LS)},
-    {"/bin/cat", QOS_ELF_IMAGE_CAT, sizeof(QOS_ELF_IMAGE_CAT)},
-    {"/bin/touch", QOS_ELF_IMAGE_TOUCH, sizeof(QOS_ELF_IMAGE_TOUCH)},
-    {"/bin/edit", QOS_ELF_IMAGE_EDIT, sizeof(QOS_ELF_IMAGE_EDIT)},
+    {"/bin/echo", qos_cmd_echo_elf, sizeof(qos_cmd_echo_elf), QOS_ELF_CMD_ECHO},
+    {"/bin/ps", qos_cmd_ps_elf, sizeof(qos_cmd_ps_elf), QOS_ELF_CMD_PS},
+    {"/bin/ping", qos_cmd_ping_elf, sizeof(qos_cmd_ping_elf), QOS_ELF_CMD_PING},
+    {"/bin/ip", qos_cmd_ip_elf, sizeof(qos_cmd_ip_elf), QOS_ELF_CMD_IP},
+    {"/bin/wget", qos_cmd_wget_elf, sizeof(qos_cmd_wget_elf), QOS_ELF_CMD_WGET},
+    {"/bin/ls", qos_cmd_ls_elf, sizeof(qos_cmd_ls_elf), QOS_ELF_CMD_LS},
+    {"/bin/cat", qos_cmd_cat_elf, sizeof(qos_cmd_cat_elf), QOS_ELF_CMD_CAT},
+    {"/bin/touch", qos_cmd_touch_elf, sizeof(qos_cmd_touch_elf), QOS_ELF_CMD_TOUCH},
+    {"/bin/edit", qos_cmd_edit_elf, sizeof(qos_cmd_edit_elf), QOS_ELF_CMD_EDIT},
 };
 
 static uint32_t g_next_pid = 3u;
@@ -450,6 +444,31 @@ static int shell_write_file(const char *path, const char *content, int append) {
     return 0;
 }
 
+static int shell_write_file_bytes(const char *path, const uint8_t *data, size_t len) {
+    int64_t fd;
+    if (path == 0 || path[0] != '/' || data == 0) {
+        return -1;
+    }
+    if (shell_path_exists(path) != 0) {
+        (void)qos_syscall_dispatch(SYSCALL_NR_UNLINK, (uint64_t)(uintptr_t)path, 0, 0, 0);
+    }
+    if (shell_touch_path(path) != 0) {
+        return -1;
+    }
+    fd = qos_syscall_dispatch(SYSCALL_NR_OPEN, (uint64_t)(uintptr_t)path, 0, 0, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    if (len != 0 && qos_syscall_dispatch(SYSCALL_NR_WRITE, (uint64_t)fd, (uint64_t)(uintptr_t)data, (uint64_t)len, 0) <
+                        0) {
+        (void)qos_syscall_dispatch(SYSCALL_NR_CLOSE, (uint64_t)fd, 0, 0, 0);
+        return -1;
+    }
+    (void)qos_syscall_dispatch(SYSCALL_NR_CLOSE, (uint64_t)fd, 0, 0, 0);
+    shell_track_file(path);
+    return 0;
+}
+
 static int shell_read_file(const char *path, char *out, size_t cap) {
     int64_t fd;
     size_t total = 0;
@@ -496,15 +515,71 @@ static const qos_user_elf_t *lookup_user_elf(const char *path) {
     return 0;
 }
 
-static int validate_elf_image(const uint8_t *image, size_t len, uint8_t *out_cmd) {
-    if (image == 0 || out_cmd == 0 || len < 5u) {
+static uint16_t elf_u16(const uint8_t *p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static uint32_t elf_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static uint64_t elf_u64(const uint8_t *p) {
+    return (uint64_t)p[0] | ((uint64_t)p[1] << 8) | ((uint64_t)p[2] << 16) | ((uint64_t)p[3] << 24) |
+           ((uint64_t)p[4] << 32) | ((uint64_t)p[5] << 40) | ((uint64_t)p[6] << 48) | ((uint64_t)p[7] << 56);
+}
+
+static int validate_elf_image(const uint8_t *image, size_t len) {
+    uint16_t e_type;
+    uint16_t e_machine;
+    uint16_t e_phentsize;
+    uint16_t e_phnum;
+    uint64_t e_phoff;
+    uint16_t i;
+    uint16_t load_count = 0;
+
+    if (image == 0 || len < 64u) {
         return -1;
     }
     if (image[0] != 0x7Fu || image[1] != 'E' || image[2] != 'L' || image[3] != 'F') {
         return -1;
     }
-    *out_cmd = image[4];
-    return 0;
+    if (image[4] != 2u || image[5] != 1u || image[6] != 1u) {
+        return -1;
+    }
+    e_type = elf_u16(image + 16);
+    e_machine = elf_u16(image + 18);
+    e_phoff = elf_u64(image + 32);
+    e_phentsize = elf_u16(image + 54);
+    e_phnum = elf_u16(image + 56);
+    if ((e_type != 2u && e_type != 3u) || (e_machine != 0x3Eu && e_machine != 0xB7u)) {
+        return -1;
+    }
+    if (e_phnum == 0u || e_phentsize < 56u) {
+        return -1;
+    }
+    if (e_phoff > len || (uint64_t)e_phnum > (UINT64_MAX - e_phoff) / (uint64_t)e_phentsize ||
+        e_phoff + (uint64_t)e_phnum * (uint64_t)e_phentsize > len) {
+        return -1;
+    }
+    for (i = 0; i < e_phnum; i++) {
+        uint64_t phoff = e_phoff + (uint64_t)i * (uint64_t)e_phentsize;
+        uint32_t p_type = elf_u32(image + phoff);
+        uint64_t p_offset = elf_u64(image + phoff + 8u);
+        uint64_t p_vaddr = elf_u64(image + phoff + 16u);
+        uint64_t p_filesz = elf_u64(image + phoff + 32u);
+        uint64_t p_memsz = elf_u64(image + phoff + 40u);
+        uint64_t p_align = elf_u64(image + phoff + 48u);
+        if (p_type == 1u) {
+            if (p_memsz < p_filesz || p_offset > len || p_filesz > len - p_offset) {
+                return -1;
+            }
+            if (p_align != 0 && (p_vaddr % p_align) != (p_offset % p_align)) {
+                return -1;
+            }
+            load_count++;
+        }
+    }
+    return load_count == 0 ? -1 : 0;
 }
 
 static const char *resolve_command_path(const char *cmd, char *resolved, size_t cap) {
@@ -762,13 +837,18 @@ static int elf_run_command(uint8_t cmd_id, uint32_t pid, const char *args, const
 static int spawn_exec_elf(uint32_t shell_pid, const char *path, const char *args, const char *stdin_data, char *out,
                           size_t out_cap) {
     const qos_user_elf_t *image = lookup_user_elf(path);
-    uint8_t cmd_id = 0;
+    uint8_t cmd_id;
     int64_t rc;
     int32_t status = -1;
     uint32_t child_pid = g_next_pid;
 
-    if (image == 0 || validate_elf_image(image->image, image->image_len, &cmd_id) != 0) {
+    if (image == 0 || validate_elf_image(image->image, image->image_len) != 0) {
         shell_out_append(out, out_cap, "exec: invalid ELF image\n");
+        return -1;
+    }
+    cmd_id = image->cmd_id;
+    if (shell_write_file_bytes(path, image->image, image->image_len) != 0) {
+        shell_out_append(out, out_cap, "exec: failed to stage image\n");
         return -1;
     }
     if (g_next_pid == UINT32_MAX) {

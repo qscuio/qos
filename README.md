@@ -162,6 +162,19 @@ Current shell features are split by target:
 
 - x86_64 probe shells: `help`, `echo`, `ps`, `ping`, `ip`, `wget`, `exit`
 - aarch64 C probe shell: adds `ls`, `cat`, `touch`, `edit`, plus shell operators `<`, `>`, `>>`, `|`
+- aarch64 Rust probe shell: supports `ls`, `pwd`, `cat`, `touch`, `edit` in addition to `help`, `echo`, `ps`, `ping`, `ip`, `wget`, `exit`
+
+For C/aarch64, each `/bin/*` command image is built from source in
+`tools/aarch64-c-probe/cmd-src/*.c` and embedded as ELF bytes by
+`scripts/build_aarch64_cmd_elves.sh` during `make c aarch64`.
+
+Both `make c <arch>` and `make rust <arch>` (`arch = x86_64|aarch64`) now also
+emit per-command ELF files on disk at:
+
+- `c-os/build/x86_64/rootfs/bin/`
+- `c-os/build/aarch64/rootfs/bin/`
+- `rust-os/build/x86_64/rootfs/bin/`
+- `rust-os/build/aarch64/rootfs/bin/`
 
 `edit` command usage:
 
@@ -185,6 +198,29 @@ Proc-like kernel info files (via `cat`):
 - `/proc/syscalls`
 - `/proc/uptime`
 - `/proc/<pid>/status`
+
+## Shared Libraries And Hot-Reload Modules
+
+Both C and Rust kernels now expose shared-object and module syscalls:
+
+- `36`: `dlopen(path, flags)` -> handle
+- `37`: `dlclose(handle)` -> `0` on success
+- `38`: `dlsym(handle, name)` -> symbol address token
+- `39`: `modload(path)` -> module id
+- `40`: `modunload(module_id)` -> `0` on success
+- `41`: `modreload(module_id)` -> new generation number
+
+Behavior implemented in the scaffold:
+
+- `dlopen/modload` accept only ELF `ET_DYN` images (shared objects).
+- `dlopen` deduplicates by path and uses refcounting.
+- `modreload` keeps module id stable and increments generation.
+- `modunload` releases module state and backing shared object reference.
+
+Userspace wrappers are available in both libc implementations:
+
+- C libc: `qos_dlopen`, `qos_dlclose`, `qos_dlsym`, `qos_modload`, `qos_modunload`, `qos_modreload`
+- Rust libc: same `qos_*` API names
 
 ## Useful QEMU Options
 

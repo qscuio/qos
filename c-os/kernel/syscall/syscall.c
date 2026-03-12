@@ -23,6 +23,7 @@ extern uint32_t qos_drivers_count(void) QOS_WEAK;
 extern uint32_t qos_proc_count(void) QOS_WEAK;
 extern int qos_proc_fork(uint32_t parent_pid, uint32_t child_pid) QOS_WEAK;
 extern int qos_proc_exec_signal_reset(uint32_t pid) QOS_WEAK;
+extern int qos_proc_exec_image_set(uint32_t pid, const qos_proc_exec_image_t *image) QOS_WEAK;
 extern int qos_proc_exit(uint32_t pid, int32_t code) QOS_WEAK;
 extern int32_t qos_proc_wait(uint32_t parent_pid, int32_t pid, int32_t *out_status, uint32_t options) QOS_WEAK;
 extern int qos_proc_alive(uint32_t pid) QOS_WEAK;
@@ -97,6 +98,16 @@ static uint32_t g_count = 0;
 #define QOS_SOCK_PORT_WORD_BITS 32U
 #define QOS_SOCK_PORT_WORDS ((QOS_SOCK_PORT_COUNT + QOS_SOCK_PORT_WORD_BITS - 1U) / QOS_SOCK_PORT_WORD_BITS)
 #define QOS_SOCK_PENDING_MAX 16U
+#define QOS_ELF_CLASS_64 2u
+#define QOS_ELF_DATA_LSB 1u
+#define QOS_ELF_ET_EXEC 2u
+#define QOS_ELF_ET_DYN 3u
+#define QOS_ELF_EM_X86_64 0x3Eu
+#define QOS_ELF_EM_AARCH64 0xB7u
+#define QOS_ELF_PT_LOAD 1u
+#define QOS_ELF_PT_INTERP 3u
+#define QOS_SHLIB_MAX 64u
+#define QOS_MODULE_MAX 32u
 
 static uint8_t g_fd_used[QOS_FD_MAX];
 static uint8_t g_fd_kind[QOS_FD_MAX];
@@ -139,6 +150,20 @@ static uint8_t g_file_data[QOS_FILE_MAX][QOS_PIPE_CAP];
 static uint8_t g_pipe_used[QOS_PIPE_MAX];
 static uint16_t g_pipe_len[QOS_PIPE_MAX];
 static uint8_t g_pipe_buf[QOS_PIPE_MAX][QOS_PIPE_CAP];
+
+static uint8_t g_shlib_used[QOS_SHLIB_MAX];
+static uint32_t g_shlib_handle[QOS_SHLIB_MAX];
+static uint32_t g_shlib_refcount[QOS_SHLIB_MAX];
+static uint16_t g_shlib_file_id[QOS_SHLIB_MAX];
+static char g_shlib_path[QOS_SHLIB_MAX][QOS_FILE_PATH_MAX];
+static uint32_t g_shlib_next_handle = 1u;
+
+static uint8_t g_module_used[QOS_MODULE_MAX];
+static uint32_t g_module_id[QOS_MODULE_MAX];
+static uint32_t g_module_generation[QOS_MODULE_MAX];
+static uint32_t g_module_shlib_handle[QOS_MODULE_MAX];
+static char g_module_path[QOS_MODULE_MAX][QOS_FILE_PATH_MAX];
+static uint32_t g_module_next_id = 1u;
 
 static int fd_valid(uint32_t fd) {
     return fd < QOS_FD_MAX && g_fd_used[fd] != 0;
@@ -363,6 +388,392 @@ static void file_unlink_path(const char *path) {
     if (file_has_refs((uint16_t)idx) == 0) {
         file_drop((uint16_t)idx);
     }
+}
+
+static uint16_t elf_u16(const uint8_t *p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static uint32_t elf_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static uint64_t elf_u64(const uint8_t *p) {
+    return (uint64_t)p[0] | ((uint64_t)p[1] << 8) | ((uint64_t)p[2] << 16) | ((uint64_t)p[3] << 24) |
+           ((uint64_t)p[4] << 32) | ((uint64_t)p[5] << 40) | ((uint64_t)p[6] << 48) | ((uint64_t)p[7] << 56);
+}
+
+static int parse_exec_elf_image(const uint8_t *image,
+                                uint64_t image_len,
+                                qos_proc_exec_image_t *out_image) {
+    uint16_t e_type;
+    uint16_t e_machine;
+    uint16_t e_phentsize;
+    uint16_t e_phnum;
+    uint64_t e_phoff;
+    uint16_t load_count = 0;
+    uint8_t has_interp = 0;
+    uint64_t interp_off = 0;
+    uint64_t interp_len = 0;
+    uint16_t i;
+
+    if (image == 0 || out_image == 0 || image_len < 64u) {
+        return -1;
+    }
+    if (image[0] != 0x7Fu || image[1] != 'E' || image[2] != 'L' || image[3] != 'F') {
+        return -1;
+    }
+    if (image[4] != QOS_ELF_CLASS_64 || image[5] != QOS_ELF_DATA_LSB || image[6] != 1u) {
+        return -1;
+    }
+
+    e_type = elf_u16(image + 16);
+    e_machine = elf_u16(image + 18);
+    e_phoff = elf_u64(image + 32);
+    e_phentsize = elf_u16(image + 54);
+    e_phnum = elf_u16(image + 56);
+
+    if ((e_type != QOS_ELF_ET_EXEC && e_type != QOS_ELF_ET_DYN) ||
+        (e_machine != QOS_ELF_EM_X86_64 && e_machine != QOS_ELF_EM_AARCH64)) {
+        return -1;
+    }
+    if (e_phnum == 0 || e_phentsize < 56u) {
+        return -1;
+    }
+    if (e_phoff > image_len) {
+        return -1;
+    }
+    if ((uint64_t)e_phnum > (UINT64_MAX - e_phoff) / (uint64_t)e_phentsize) {
+        return -1;
+    }
+    if (e_phoff + (uint64_t)e_phnum * (uint64_t)e_phentsize > image_len) {
+        return -1;
+    }
+
+    for (i = 0; i < e_phnum; i++) {
+        uint64_t phoff = e_phoff + (uint64_t)i * (uint64_t)e_phentsize;
+        uint32_t p_type = elf_u32(image + phoff);
+        uint64_t p_offset = elf_u64(image + phoff + 8u);
+        uint64_t p_vaddr = elf_u64(image + phoff + 16u);
+        uint64_t p_filesz = elf_u64(image + phoff + 32u);
+        uint64_t p_memsz = elf_u64(image + phoff + 40u);
+        uint64_t p_align = elf_u64(image + phoff + 48u);
+
+        if (p_type == QOS_ELF_PT_LOAD) {
+            if (p_memsz < p_filesz) {
+                return -1;
+            }
+            if (p_filesz != 0) {
+                if (p_offset > image_len || p_filesz > image_len - p_offset) {
+                    return -1;
+                }
+            }
+            if (p_align != 0 && (p_vaddr % p_align) != (p_offset % p_align)) {
+                return -1;
+            }
+            load_count++;
+        } else if (p_type == QOS_ELF_PT_INTERP) {
+            if (p_filesz == 0 || p_offset > image_len || p_filesz > image_len - p_offset) {
+                return -1;
+            }
+            if (image[p_offset + p_filesz - 1u] != '\0') {
+                return -1;
+            }
+            has_interp = 1u;
+            interp_off = p_offset;
+            interp_len = p_filesz;
+        }
+    }
+
+    if (load_count == 0u) {
+        return -1;
+    }
+
+    out_image->entry = elf_u64(image + 24);
+    out_image->phoff = e_phoff;
+    out_image->phentsize = e_phentsize;
+    out_image->phnum = e_phnum;
+    out_image->load_count = load_count;
+    out_image->has_interp = has_interp;
+    out_image->_pad0 = 0;
+    out_image->interp_off = interp_off;
+    out_image->interp_len = interp_len;
+    return 0;
+}
+
+static int parse_shared_elf_image(const uint8_t *image, uint64_t image_len) {
+    qos_proc_exec_image_t dummy;
+    if (image == 0 || image_len < 64u) {
+        return -1;
+    }
+    if (elf_u16(image + 16u) != QOS_ELF_ET_DYN) {
+        return -1;
+    }
+    return parse_exec_elf_image(image, image_len, &dummy);
+}
+
+static int shlib_find_slot_by_handle(uint32_t handle) {
+    uint32_t i;
+    if (handle == 0) {
+        return -1;
+    }
+    for (i = 0; i < QOS_SHLIB_MAX; i++) {
+        if (g_shlib_used[i] != 0 && g_shlib_handle[i] == handle) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static int shlib_find_slot_by_path(const char *path) {
+    uint32_t i;
+    if (path == 0) {
+        return -1;
+    }
+    for (i = 0; i < QOS_SHLIB_MAX; i++) {
+        if (g_shlib_used[i] != 0 && strcmp(g_shlib_path[i], path) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static int shlib_free_slot(void) {
+    uint32_t i;
+    for (i = 0; i < QOS_SHLIB_MAX; i++) {
+        if (g_shlib_used[i] == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static uint32_t shlib_next_handle(void) {
+    uint32_t handle = g_shlib_next_handle++;
+    if (handle == 0) {
+        handle = g_shlib_next_handle++;
+    }
+    if (handle == 0) {
+        handle = 1u;
+        g_shlib_next_handle = 2u;
+    }
+    return handle;
+}
+
+static int shlib_load_path(const char *path, int force_new) {
+    int slot;
+    int file_id;
+    uint32_t handle;
+    uint16_t len;
+
+    if (path == 0 || path[0] != '/') {
+        return -1;
+    }
+
+    if (force_new == 0) {
+        slot = shlib_find_slot_by_path(path);
+        if (slot >= 0) {
+            g_shlib_refcount[(uint32_t)slot]++;
+            return (int)g_shlib_handle[(uint32_t)slot];
+        }
+    }
+
+    file_id = file_find(path);
+    if (file_id < 0 || g_file_used[(uint32_t)file_id] == 0 || g_file_len[(uint32_t)file_id] == 0) {
+        return -1;
+    }
+    if (parse_shared_elf_image(g_file_data[(uint32_t)file_id], (uint64_t)g_file_len[(uint32_t)file_id]) != 0) {
+        return -1;
+    }
+
+    slot = shlib_free_slot();
+    if (slot < 0) {
+        return -1;
+    }
+
+    handle = shlib_next_handle();
+    g_shlib_used[(uint32_t)slot] = 1;
+    g_shlib_handle[(uint32_t)slot] = handle;
+    g_shlib_refcount[(uint32_t)slot] = 1;
+    g_shlib_file_id[(uint32_t)slot] = (uint16_t)file_id;
+    strncpy(g_shlib_path[(uint32_t)slot], path, QOS_FILE_PATH_MAX - 1u);
+    g_shlib_path[(uint32_t)slot][QOS_FILE_PATH_MAX - 1u] = '\0';
+    len = (uint16_t)strlen(g_shlib_path[(uint32_t)slot]);
+    if (len == 0) {
+        g_shlib_used[(uint32_t)slot] = 0;
+        g_shlib_handle[(uint32_t)slot] = 0;
+        g_shlib_refcount[(uint32_t)slot] = 0;
+        g_shlib_file_id[(uint32_t)slot] = UINT16_MAX;
+        g_shlib_path[(uint32_t)slot][0] = '\0';
+        return -1;
+    }
+    return (int)handle;
+}
+
+static int shlib_release_handle(uint32_t handle) {
+    int slot = shlib_find_slot_by_handle(handle);
+    if (slot < 0) {
+        return -1;
+    }
+    if (g_shlib_refcount[(uint32_t)slot] == 0) {
+        return -1;
+    }
+    g_shlib_refcount[(uint32_t)slot]--;
+    if (g_shlib_refcount[(uint32_t)slot] == 0) {
+        g_shlib_used[(uint32_t)slot] = 0;
+        g_shlib_handle[(uint32_t)slot] = 0;
+        g_shlib_refcount[(uint32_t)slot] = 0;
+        g_shlib_file_id[(uint32_t)slot] = UINT16_MAX;
+        g_shlib_path[(uint32_t)slot][0] = '\0';
+    }
+    return 0;
+}
+
+static int module_find_slot_by_id(uint32_t module_id) {
+    uint32_t i;
+    if (module_id == 0) {
+        return -1;
+    }
+    for (i = 0; i < QOS_MODULE_MAX; i++) {
+        if (g_module_used[i] != 0 && g_module_id[i] == module_id) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static int module_find_slot_by_path(const char *path) {
+    uint32_t i;
+    if (path == 0) {
+        return -1;
+    }
+    for (i = 0; i < QOS_MODULE_MAX; i++) {
+        if (g_module_used[i] != 0 && strcmp(g_module_path[i], path) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static int module_free_slot(void) {
+    uint32_t i;
+    for (i = 0; i < QOS_MODULE_MAX; i++) {
+        if (g_module_used[i] == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static uint32_t module_next_id(void) {
+    uint32_t id = g_module_next_id++;
+    if (id == 0) {
+        id = g_module_next_id++;
+    }
+    if (id == 0) {
+        id = 1u;
+        g_module_next_id = 2u;
+    }
+    return id;
+}
+
+static int module_load_path(const char *path) {
+    int existing = module_find_slot_by_path(path);
+    int handle;
+    int slot;
+    uint32_t id;
+
+    if (path == 0 || path[0] != '/') {
+        return -1;
+    }
+
+    if (existing >= 0) {
+        return (int)g_module_id[(uint32_t)existing];
+    }
+
+    handle = shlib_load_path(path, 0);
+    if (handle < 0) {
+        return -1;
+    }
+
+    slot = module_free_slot();
+    if (slot < 0) {
+        (void)shlib_release_handle((uint32_t)handle);
+        return -1;
+    }
+
+    id = module_next_id();
+    g_module_used[(uint32_t)slot] = 1;
+    g_module_id[(uint32_t)slot] = id;
+    g_module_generation[(uint32_t)slot] = 1;
+    g_module_shlib_handle[(uint32_t)slot] = (uint32_t)handle;
+    strncpy(g_module_path[(uint32_t)slot], path, QOS_FILE_PATH_MAX - 1u);
+    g_module_path[(uint32_t)slot][QOS_FILE_PATH_MAX - 1u] = '\0';
+    if (g_module_path[(uint32_t)slot][0] == '\0') {
+        g_module_used[(uint32_t)slot] = 0;
+        g_module_id[(uint32_t)slot] = 0;
+        g_module_generation[(uint32_t)slot] = 0;
+        g_module_shlib_handle[(uint32_t)slot] = 0;
+        (void)shlib_release_handle((uint32_t)handle);
+        return -1;
+    }
+    return (int)id;
+}
+
+static int module_unload_id(uint32_t module_id) {
+    int slot = module_find_slot_by_id(module_id);
+    uint32_t handle;
+    if (slot < 0) {
+        return -1;
+    }
+    handle = g_module_shlib_handle[(uint32_t)slot];
+    g_module_used[(uint32_t)slot] = 0;
+    g_module_id[(uint32_t)slot] = 0;
+    g_module_generation[(uint32_t)slot] = 0;
+    g_module_shlib_handle[(uint32_t)slot] = 0;
+    g_module_path[(uint32_t)slot][0] = '\0';
+    if (handle != 0) {
+        (void)shlib_release_handle(handle);
+    }
+    return 0;
+}
+
+static int module_reload_id(uint32_t module_id) {
+    int slot = module_find_slot_by_id(module_id);
+    int new_handle;
+    uint32_t old_handle;
+    uint32_t generation;
+    if (slot < 0) {
+        return -1;
+    }
+    new_handle = shlib_load_path(g_module_path[(uint32_t)slot], 1);
+    if (new_handle < 0) {
+        return -1;
+    }
+    old_handle = g_module_shlib_handle[(uint32_t)slot];
+    g_module_shlib_handle[(uint32_t)slot] = (uint32_t)new_handle;
+    generation = g_module_generation[(uint32_t)slot] + 1u;
+    if (generation == 0) {
+        generation = 1u;
+    }
+    g_module_generation[(uint32_t)slot] = generation;
+    if (old_handle != 0) {
+        (void)shlib_release_handle(old_handle);
+    }
+    return (int)generation;
+}
+
+static uint32_t symbol_hash32(const char *name) {
+    uint32_t hash = 5381u;
+    uint32_t i = 0;
+    if (name == 0 || name[0] == '\0') {
+        return 0;
+    }
+    while (name[i] != '\0') {
+        hash = ((hash << 5) + hash) ^ (uint8_t)name[i];
+        i++;
+    }
+    return hash;
 }
 
 static int proc_path_kind(const char *path, uint8_t *out_kind, uint32_t *out_pid) {
@@ -765,6 +1176,12 @@ static void syscall_register_default_signal_ops(void) {
     (void)qos_syscall_register(SYSCALL_NR_SIGPENDING, SYSCALL_OP_SIGPENDING, 0);
     (void)qos_syscall_register(SYSCALL_NR_SIGSUSPEND, SYSCALL_OP_SIGSUSPEND, 0);
     (void)qos_syscall_register(SYSCALL_NR_SIGALTSTACK, SYSCALL_OP_SIGALTSTACK, 0);
+    (void)qos_syscall_register(SYSCALL_NR_DLOPEN, SYSCALL_OP_DLOPEN, 0);
+    (void)qos_syscall_register(SYSCALL_NR_DLCLOSE, SYSCALL_OP_DLCLOSE, 0);
+    (void)qos_syscall_register(SYSCALL_NR_DLSYM, SYSCALL_OP_DLSYM, 0);
+    (void)qos_syscall_register(SYSCALL_NR_MODLOAD, SYSCALL_OP_MODLOAD, 0);
+    (void)qos_syscall_register(SYSCALL_NR_MODUNLOAD, SYSCALL_OP_MODUNLOAD, 0);
+    (void)qos_syscall_register(SYSCALL_NR_MODRELOAD, SYSCALL_OP_MODRELOAD, 0);
 }
 
 void qos_syscall_reset(void) {
@@ -815,6 +1232,23 @@ void qos_syscall_reset(void) {
     memset(g_pipe_used, 0, sizeof(g_pipe_used));
     memset(g_pipe_len, 0, sizeof(g_pipe_len));
     memset(g_pipe_buf, 0, sizeof(g_pipe_buf));
+    memset(g_shlib_used, 0, sizeof(g_shlib_used));
+    memset(g_shlib_handle, 0, sizeof(g_shlib_handle));
+    memset(g_shlib_refcount, 0, sizeof(g_shlib_refcount));
+    memset(g_shlib_path, 0, sizeof(g_shlib_path));
+    memset(g_module_used, 0, sizeof(g_module_used));
+    memset(g_module_id, 0, sizeof(g_module_id));
+    memset(g_module_generation, 0, sizeof(g_module_generation));
+    memset(g_module_shlib_handle, 0, sizeof(g_module_shlib_handle));
+    memset(g_module_path, 0, sizeof(g_module_path));
+    {
+        uint32_t i;
+        for (i = 0; i < QOS_SHLIB_MAX; i++) {
+            g_shlib_file_id[i] = UINT16_MAX;
+        }
+    }
+    g_shlib_next_handle = 1u;
+    g_module_next_id = 1u;
     g_count = 0;
 }
 
@@ -835,7 +1269,9 @@ int qos_syscall_register(uint32_t nr, uint32_t op, int64_t value) {
         op != SYSCALL_OP_SLEEP && op != SYSCALL_OP_SOCKET && op != SYSCALL_OP_BIND &&
         op != SYSCALL_OP_LISTEN && op != SYSCALL_OP_ACCEPT && op != SYSCALL_OP_CONNECT &&
         op != SYSCALL_OP_SEND && op != SYSCALL_OP_RECV && op != SYSCALL_OP_GETDENTS &&
-        op != SYSCALL_OP_LSEEK && op != SYSCALL_OP_PIPE) {
+        op != SYSCALL_OP_LSEEK && op != SYSCALL_OP_PIPE && op != SYSCALL_OP_DLOPEN &&
+        op != SYSCALL_OP_DLCLOSE && op != SYSCALL_OP_DLSYM && op != SYSCALL_OP_MODLOAD &&
+        op != SYSCALL_OP_MODUNLOAD && op != SYSCALL_OP_MODRELOAD) {
         return -1;
     }
 
@@ -1796,10 +2232,70 @@ int64_t qos_syscall_dispatch(uint32_t nr, uint64_t a0, uint64_t a1, uint64_t a2,
     }
 
     if (g_ops[nr] == SYSCALL_OP_EXEC) {
+        const char *path = (const char *)(uintptr_t)a1;
+        qos_proc_exec_image_t image;
+        int file_id;
         if (qos_proc_exec_signal_reset == 0) {
             return -1;
         }
-        return qos_proc_exec_signal_reset((uint32_t)a0) == 0 ? 0 : -1;
+        if (path == 0) {
+            return qos_proc_exec_signal_reset((uint32_t)a0) == 0 ? 0 : -1;
+        }
+        if (qos_proc_exec_image_set == 0) {
+            return -1;
+        }
+        file_id = file_find(path);
+        if (file_id < 0 || g_file_used[(uint32_t)file_id] == 0 || g_file_len[(uint32_t)file_id] == 0) {
+            return -1;
+        }
+        if (parse_exec_elf_image(g_file_data[(uint32_t)file_id], (uint64_t)g_file_len[(uint32_t)file_id], &image) != 0) {
+            return -1;
+        }
+        if (qos_proc_exec_signal_reset((uint32_t)a0) != 0) {
+            return -1;
+        }
+        return qos_proc_exec_image_set((uint32_t)a0, &image) == 0 ? 0 : -1;
+    }
+
+    if (g_ops[nr] == SYSCALL_OP_DLOPEN) {
+        const char *path = (const char *)(uintptr_t)a0;
+        int handle = shlib_load_path(path, 0);
+        return handle < 0 ? -1 : (int64_t)handle;
+    }
+
+    if (g_ops[nr] == SYSCALL_OP_DLCLOSE) {
+        return shlib_release_handle((uint32_t)a0) == 0 ? 0 : -1;
+    }
+
+    if (g_ops[nr] == SYSCALL_OP_DLSYM) {
+        uint32_t handle = (uint32_t)a0;
+        const char *name = (const char *)(uintptr_t)a1;
+        uint32_t hash;
+        uint64_t addr;
+        if (shlib_find_slot_by_handle(handle) < 0 || name == 0 || name[0] == '\0') {
+            return -1;
+        }
+        hash = symbol_hash32(name);
+        if (hash == 0) {
+            return -1;
+        }
+        addr = 0x7000000000000000ULL | ((uint64_t)handle << 24u) | (uint64_t)(hash & 0x00FFFFFFu);
+        return (int64_t)addr;
+    }
+
+    if (g_ops[nr] == SYSCALL_OP_MODLOAD) {
+        const char *path = (const char *)(uintptr_t)a0;
+        int module_id = module_load_path(path);
+        return module_id < 0 ? -1 : (int64_t)module_id;
+    }
+
+    if (g_ops[nr] == SYSCALL_OP_MODUNLOAD) {
+        return module_unload_id((uint32_t)a0) == 0 ? 0 : -1;
+    }
+
+    if (g_ops[nr] == SYSCALL_OP_MODRELOAD) {
+        int generation = module_reload_id((uint32_t)a0);
+        return generation < 0 ? -1 : (int64_t)generation;
     }
 
     if (g_ops[nr] == SYSCALL_OP_EXIT) {

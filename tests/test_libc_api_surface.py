@@ -53,6 +53,12 @@ REQUIRED = [
     "qos_execv",
     "qos_execve",
     "qos_waitpid",
+    "qos_dlopen",
+    "qos_dlclose",
+    "qos_dlsym",
+    "qos_modload",
+    "qos_modunload",
+    "qos_modreload",
     "qos_abort",
     # Network
     "qos_socket",

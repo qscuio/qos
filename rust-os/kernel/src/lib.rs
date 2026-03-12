@@ -40,6 +40,10 @@ static NET_LOCK: AtomicBool = AtomicBool::new(false);
 static DRIVERS_LOCK: AtomicBool = AtomicBool::new(false);
 static SYSCALL_LOCK: AtomicBool = AtomicBool::new(false);
 static PROC_LOCK: AtomicBool = AtomicBool::new(false);
+static SOFTIRQ_LOCK: AtomicBool = AtomicBool::new(false);
+static TIMER_LOCK: AtomicBool = AtomicBool::new(false);
+static KTHREAD_LOCK: AtomicBool = AtomicBool::new(false);
+static NAPI_LOCK: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelError {
@@ -128,6 +132,12 @@ pub const QOS_PIPE_CAP: usize = 1024;
 pub const QOS_PROC_MAX: usize = 256;
 pub const QOS_SIGNAL_MAX: usize = 32;
 pub const QOS_WAIT_WNOHANG: u32 = 1;
+pub const QOS_SOFTIRQ_MAX: usize = 8;
+pub const QOS_SOFTIRQ_TIMER: u32 = 0;
+pub const QOS_SOFTIRQ_NET_RX: u32 = 1;
+pub const QOS_TIMER_MAX: usize = 128;
+pub const QOS_KTHREAD_MAX: usize = 64;
+pub const QOS_NAPI_MAX: usize = 32;
 
 pub const QOS_SIG_DFL: u32 = 0;
 pub const QOS_SIG_IGN: u32 = 1;
@@ -197,6 +207,12 @@ pub const SYSCALL_OP_RECV: u32 = 36;
 pub const SYSCALL_OP_GETDENTS: u32 = 37;
 pub const SYSCALL_OP_LSEEK: u32 = 38;
 pub const SYSCALL_OP_PIPE: u32 = 39;
+pub const SYSCALL_OP_DLOPEN: u32 = 40;
+pub const SYSCALL_OP_DLCLOSE: u32 = 41;
+pub const SYSCALL_OP_DLSYM: u32 = 42;
+pub const SYSCALL_OP_MODLOAD: u32 = 43;
+pub const SYSCALL_OP_MODUNLOAD: u32 = 44;
+pub const SYSCALL_OP_MODRELOAD: u32 = 45;
 
 pub const SYSCALL_QUERY_INIT_STATE: u32 = 1;
 pub const SYSCALL_QUERY_PMM_TOTAL: u32 = 2;
@@ -245,6 +261,12 @@ pub const SYSCALL_NR_SIGRETURN: u32 = 32;
 pub const SYSCALL_NR_SIGPENDING: u32 = 33;
 pub const SYSCALL_NR_SIGSUSPEND: u32 = 34;
 pub const SYSCALL_NR_SIGALTSTACK: u32 = 35;
+pub const SYSCALL_NR_DLOPEN: u32 = 36;
+pub const SYSCALL_NR_DLCLOSE: u32 = 37;
+pub const SYSCALL_NR_DLSYM: u32 = 38;
+pub const SYSCALL_NR_MODLOAD: u32 = 39;
+pub const SYSCALL_NR_MODUNLOAD: u32 = 40;
+pub const SYSCALL_NR_MODRELOAD: u32 = 41;
 
 pub const SYSCALL_NR_QUERY_INIT_STATE: u32 = 64;
 pub const SYSCALL_NR_QUERY_PMM_TOTAL: u32 = 65;
@@ -277,6 +299,20 @@ const QOS_SOCK_PORT_MAX: u16 = 65535;
 const QOS_SOCK_PORT_COUNT: usize = QOS_SOCK_PORT_MAX as usize - QOS_SOCK_PORT_MIN as usize + 1;
 const QOS_SOCK_PORT_WORDS: usize = (QOS_SOCK_PORT_COUNT + 31) / 32;
 const QOS_SOCK_PENDING_MAX: usize = 16;
+const QOS_SHLIB_MAX: usize = 64;
+const QOS_MODULE_MAX: usize = 32;
+const ELF_CLASS_64: u8 = 2;
+const ELF_DATA_LSB: u8 = 1;
+const ELF_ET_EXEC: u16 = 2;
+const ELF_ET_DYN: u16 = 3;
+const ELF_EM_X86_64: u16 = 0x3E;
+const ELF_EM_AARCH64: u16 = 0xB7;
+const ELF_PT_LOAD: u32 = 1;
+const ELF_PT_INTERP: u32 = 3;
+type SoftirqHandler = fn(usize);
+type TimerCallback = fn(usize);
+type KthreadFn = fn(usize);
+type NapiPoll = fn(usize, u32) -> u32;
 
 #[derive(Clone, Copy)]
 struct SchedState {
@@ -486,6 +522,20 @@ struct SyscallState {
     pipe_buf: [[u8; QOS_PIPE_CAP]; QOS_PIPE_MAX],
     sock_port_stream: [u32; QOS_SOCK_PORT_WORDS],
     sock_port_dgram: [u32; QOS_SOCK_PORT_WORDS],
+    shlib_used: [u8; QOS_SHLIB_MAX],
+    shlib_handle: [u32; QOS_SHLIB_MAX],
+    shlib_refcount: [u32; QOS_SHLIB_MAX],
+    shlib_file_id: [u16; QOS_SHLIB_MAX],
+    shlib_paths: [[u8; QOS_VFS_PATH_MAX]; QOS_SHLIB_MAX],
+    shlib_path_len: [u8; QOS_SHLIB_MAX],
+    shlib_next_handle: u32,
+    module_used: [u8; QOS_MODULE_MAX],
+    module_id: [u32; QOS_MODULE_MAX],
+    module_generation: [u32; QOS_MODULE_MAX],
+    module_shlib_handle: [u32; QOS_MODULE_MAX],
+    module_paths: [[u8; QOS_VFS_PATH_MAX]; QOS_MODULE_MAX],
+    module_path_len: [u8; QOS_MODULE_MAX],
+    module_next_id: u32,
 }
 
 impl SyscallState {
@@ -535,6 +585,20 @@ impl SyscallState {
             pipe_buf: [[0; QOS_PIPE_CAP]; QOS_PIPE_MAX],
             sock_port_stream: [0; QOS_SOCK_PORT_WORDS],
             sock_port_dgram: [0; QOS_SOCK_PORT_WORDS],
+            shlib_used: [0; QOS_SHLIB_MAX],
+            shlib_handle: [0; QOS_SHLIB_MAX],
+            shlib_refcount: [0; QOS_SHLIB_MAX],
+            shlib_file_id: [u16::MAX; QOS_SHLIB_MAX],
+            shlib_paths: [[0; QOS_VFS_PATH_MAX]; QOS_SHLIB_MAX],
+            shlib_path_len: [0; QOS_SHLIB_MAX],
+            shlib_next_handle: 1,
+            module_used: [0; QOS_MODULE_MAX],
+            module_id: [0; QOS_MODULE_MAX],
+            module_generation: [0; QOS_MODULE_MAX],
+            module_shlib_handle: [0; QOS_MODULE_MAX],
+            module_paths: [[0; QOS_VFS_PATH_MAX]; QOS_MODULE_MAX],
+            module_path_len: [0; QOS_MODULE_MAX],
+            module_next_id: 1,
         }
     }
 }
@@ -560,6 +624,14 @@ struct ProcState {
     sig_altstack_sp: [u64; QOS_PROC_MAX],
     sig_altstack_size: [u64; QOS_PROC_MAX],
     sig_altstack_flags: [u32; QOS_PROC_MAX],
+    exec_entry: [u64; QOS_PROC_MAX],
+    exec_phoff: [u64; QOS_PROC_MAX],
+    exec_phentsize: [u16; QOS_PROC_MAX],
+    exec_phnum: [u16; QOS_PROC_MAX],
+    exec_load_count: [u16; QOS_PROC_MAX],
+    exec_has_interp: [u8; QOS_PROC_MAX],
+    exec_interp_off: [u64; QOS_PROC_MAX],
+    exec_interp_len: [u64; QOS_PROC_MAX],
     count: u32,
 }
 
@@ -579,6 +651,14 @@ impl ProcState {
             sig_altstack_sp: [0; QOS_PROC_MAX],
             sig_altstack_size: [0; QOS_PROC_MAX],
             sig_altstack_flags: [0; QOS_PROC_MAX],
+            exec_entry: [0; QOS_PROC_MAX],
+            exec_phoff: [0; QOS_PROC_MAX],
+            exec_phentsize: [0; QOS_PROC_MAX],
+            exec_phnum: [0; QOS_PROC_MAX],
+            exec_load_count: [0; QOS_PROC_MAX],
+            exec_has_interp: [0; QOS_PROC_MAX],
+            exec_interp_off: [0; QOS_PROC_MAX],
+            exec_interp_len: [0; QOS_PROC_MAX],
             count: 0,
         }
     }
@@ -589,6 +669,167 @@ struct ProcCell(UnsafeCell<ProcState>);
 unsafe impl Sync for ProcCell {}
 
 static PROCS: ProcCell = ProcCell(UnsafeCell::new(ProcState::new()));
+
+#[derive(Clone, Copy)]
+struct SoftirqState {
+    handlers: [Option<SoftirqHandler>; QOS_SOFTIRQ_MAX],
+    handler_ctx: [usize; QOS_SOFTIRQ_MAX],
+    pending_mask: u32,
+}
+
+impl SoftirqState {
+    const fn new() -> Self {
+        Self {
+            handlers: [None; QOS_SOFTIRQ_MAX],
+            handler_ctx: [0; QOS_SOFTIRQ_MAX],
+            pending_mask: 0,
+        }
+    }
+}
+
+struct SoftirqCell(UnsafeCell<SoftirqState>);
+
+unsafe impl Sync for SoftirqCell {}
+
+static SOFTIRQ: SoftirqCell = SoftirqCell(UnsafeCell::new(SoftirqState::new()));
+
+#[derive(Clone, Copy)]
+struct TimerEntry {
+    used: u8,
+    periodic: u8,
+    pending: u8,
+    expires: u64,
+    interval: u32,
+    callback: Option<TimerCallback>,
+    ctx: usize,
+}
+
+impl TimerEntry {
+    const fn new() -> Self {
+        Self {
+            used: 0,
+            periodic: 0,
+            pending: 0,
+            expires: 0,
+            interval: 0,
+            callback: None,
+            ctx: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TimerState {
+    entries: [TimerEntry; QOS_TIMER_MAX],
+    jiffies: u64,
+}
+
+impl TimerState {
+    const fn new() -> Self {
+        Self {
+            entries: [TimerEntry::new(); QOS_TIMER_MAX],
+            jiffies: 0,
+        }
+    }
+}
+
+struct TimerCell(UnsafeCell<TimerState>);
+
+unsafe impl Sync for TimerCell {}
+
+static TIMERS: TimerCell = TimerCell(UnsafeCell::new(TimerState::new()));
+
+#[derive(Clone, Copy)]
+struct KthreadEntry {
+    used: u8,
+    runnable: u8,
+    tid: u32,
+    entry: Option<KthreadFn>,
+    arg: usize,
+    run_count: u32,
+}
+
+impl KthreadEntry {
+    const fn new() -> Self {
+        Self {
+            used: 0,
+            runnable: 0,
+            tid: 0,
+            entry: None,
+            arg: 0,
+            run_count: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct KthreadState {
+    entries: [KthreadEntry; QOS_KTHREAD_MAX],
+    next_tid: u32,
+    cursor: u32,
+}
+
+impl KthreadState {
+    const fn new() -> Self {
+        Self {
+            entries: [KthreadEntry::new(); QOS_KTHREAD_MAX],
+            next_tid: 1,
+            cursor: 0,
+        }
+    }
+}
+
+struct KthreadCell(UnsafeCell<KthreadState>);
+
+unsafe impl Sync for KthreadCell {}
+
+static KTHREADS: KthreadCell = KthreadCell(UnsafeCell::new(KthreadState::new()));
+
+#[derive(Clone, Copy)]
+struct NapiEntry {
+    used: u8,
+    scheduled: u8,
+    id: u32,
+    weight: u32,
+    poll: Option<NapiPoll>,
+    ctx: usize,
+    run_count: u32,
+}
+
+impl NapiEntry {
+    const fn new() -> Self {
+        Self {
+            used: 0,
+            scheduled: 0,
+            id: 0,
+            weight: 0,
+            poll: None,
+            ctx: 0,
+            run_count: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct NapiState {
+    entries: [NapiEntry; QOS_NAPI_MAX],
+    next_id: u32,
+}
+
+impl NapiState {
+    const fn new() -> Self {
+        Self {
+            entries: [NapiEntry::new(); QOS_NAPI_MAX],
+            next_id: 1,
+        }
+    }
+}
+
+struct NapiCell(UnsafeCell<NapiState>);
+
+unsafe impl Sync for NapiCell {}
+
+static NAPI: NapiCell = NapiCell(UnsafeCell::new(NapiState::new()));
 
 fn pmm_state_mut() -> &'static mut PmmState {
     unsafe { &mut *PMM.0.get() }
@@ -652,6 +893,38 @@ fn proc_state_mut() -> &'static mut ProcState {
 
 fn proc_state() -> &'static ProcState {
     unsafe { &*PROCS.0.get() }
+}
+
+fn softirq_state_mut() -> &'static mut SoftirqState {
+    unsafe { &mut *SOFTIRQ.0.get() }
+}
+
+fn softirq_state() -> &'static SoftirqState {
+    unsafe { &*SOFTIRQ.0.get() }
+}
+
+fn timer_state_mut() -> &'static mut TimerState {
+    unsafe { &mut *TIMERS.0.get() }
+}
+
+fn timer_state() -> &'static TimerState {
+    unsafe { &*TIMERS.0.get() }
+}
+
+fn kthread_state_mut() -> &'static mut KthreadState {
+    unsafe { &mut *KTHREADS.0.get() }
+}
+
+fn kthread_state() -> &'static KthreadState {
+    unsafe { &*KTHREADS.0.get() }
+}
+
+fn napi_state_mut() -> &'static mut NapiState {
+    unsafe { &mut *NAPI.0.get() }
+}
+
+fn napi_state() -> &'static NapiState {
+    unsafe { &*NAPI.0.get() }
 }
 
 fn mm_lock() {
@@ -745,6 +1018,58 @@ fn proc_unlock() {
     PROC_LOCK.store(false, Ordering::Release);
 }
 
+fn softirq_lock() {
+    while SOFTIRQ_LOCK
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        spin_loop();
+    }
+}
+
+fn softirq_unlock() {
+    SOFTIRQ_LOCK.store(false, Ordering::Release);
+}
+
+fn timer_lock() {
+    while TIMER_LOCK
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        spin_loop();
+    }
+}
+
+fn timer_unlock() {
+    TIMER_LOCK.store(false, Ordering::Release);
+}
+
+fn kthread_lock() {
+    while KTHREAD_LOCK
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        spin_loop();
+    }
+}
+
+fn kthread_unlock() {
+    KTHREAD_LOCK.store(false, Ordering::Release);
+}
+
+fn napi_lock() {
+    while NAPI_LOCK
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        spin_loop();
+    }
+}
+
+fn napi_unlock() {
+    NAPI_LOCK.store(false, Ordering::Release);
+}
+
 fn align_up(value: u64) -> u64 {
     (value + (QOS_PAGE_SIZE - 1)) & !(QOS_PAGE_SIZE - 1)
 }
@@ -778,6 +1103,24 @@ fn vfs_init() {
 fn net_init() {
     net_reset();
     mark(QOS_INIT_NET);
+}
+
+pub fn softirq_init() {
+    softirq_reset();
+}
+
+pub fn timer_init() {
+    timer_reset();
+    let _ = softirq_register(QOS_SOFTIRQ_TIMER, timer_softirq_handler, 0);
+}
+
+pub fn napi_init() {
+    napi_reset();
+    let _ = softirq_register(QOS_SOFTIRQ_NET_RX, napi_softirq_handler, 0);
+}
+
+pub fn kthread_init() {
+    kthread_reset();
 }
 
 fn sched_init() {
@@ -892,6 +1235,12 @@ fn syscall_register_default_signal_ops() {
     let _ = syscall_register(SYSCALL_NR_SIGPENDING, SYSCALL_OP_SIGPENDING, 0);
     let _ = syscall_register(SYSCALL_NR_SIGSUSPEND, SYSCALL_OP_SIGSUSPEND, 0);
     let _ = syscall_register(SYSCALL_NR_SIGALTSTACK, SYSCALL_OP_SIGALTSTACK, 0);
+    let _ = syscall_register(SYSCALL_NR_DLOPEN, SYSCALL_OP_DLOPEN, 0);
+    let _ = syscall_register(SYSCALL_NR_DLCLOSE, SYSCALL_OP_DLCLOSE, 0);
+    let _ = syscall_register(SYSCALL_NR_DLSYM, SYSCALL_OP_DLSYM, 0);
+    let _ = syscall_register(SYSCALL_NR_MODLOAD, SYSCALL_OP_MODLOAD, 0);
+    let _ = syscall_register(SYSCALL_NR_MODUNLOAD, SYSCALL_OP_MODUNLOAD, 0);
+    let _ = syscall_register(SYSCALL_NR_MODRELOAD, SYSCALL_OP_MODRELOAD, 0);
 }
 
 fn proc_init() {
@@ -1980,6 +2329,586 @@ pub fn net_tcp_retries(conn_id: u16) -> Option<u32> {
     retries
 }
 
+fn softirq_vector_valid(vector: u32) -> bool {
+    (vector as usize) < QOS_SOFTIRQ_MAX
+}
+
+pub fn softirq_reset() {
+    softirq_lock();
+    *softirq_state_mut() = SoftirqState::new();
+    softirq_unlock();
+}
+
+pub fn softirq_register(vector: u32, handler: SoftirqHandler, ctx: usize) -> bool {
+    if !softirq_vector_valid(vector) {
+        return false;
+    }
+    softirq_lock();
+    {
+        let state = softirq_state_mut();
+        state.handlers[vector as usize] = Some(handler);
+        state.handler_ctx[vector as usize] = ctx;
+    }
+    softirq_unlock();
+    true
+}
+
+pub fn softirq_raise(vector: u32) -> bool {
+    if !softirq_vector_valid(vector) {
+        return false;
+    }
+    softirq_lock();
+    {
+        let state = softirq_state_mut();
+        state.pending_mask |= 1u32 << vector;
+    }
+    softirq_unlock();
+    true
+}
+
+pub fn softirq_pending_mask() -> u32 {
+    softirq_lock();
+    let pending = softirq_state().pending_mask;
+    softirq_unlock();
+    pending
+}
+
+pub fn softirq_run() -> u32 {
+    let mut handled = 0u32;
+    loop {
+        let pending = softirq_pending_mask();
+        if pending == 0 {
+            break;
+        }
+
+        let mut vector: Option<usize> = None;
+        let mut i = 0usize;
+        while i < QOS_SOFTIRQ_MAX {
+            if (pending & (1u32 << i)) != 0 {
+                vector = Some(i);
+                break;
+            }
+            i += 1;
+        }
+
+        let v = match vector {
+            Some(idx) => idx,
+            None => break,
+        };
+
+        let (handler, ctx) = {
+            softirq_lock();
+            let state = softirq_state_mut();
+            state.pending_mask &= !(1u32 << v);
+            (state.handlers[v], state.handler_ctx[v])
+        };
+        softirq_unlock();
+
+        if let Some(fn_ptr) = handler {
+            fn_ptr(ctx);
+            handled = handled.saturating_add(1);
+        }
+    }
+    handled
+}
+
+fn timer_id_valid(timer_id: i32) -> bool {
+    timer_id > 0 && (timer_id as usize) <= QOS_TIMER_MAX
+}
+
+fn timer_softirq_handler(_ctx: usize) {
+    loop {
+        let task = {
+            timer_lock();
+            let state = timer_state_mut();
+            let now = state.jiffies;
+            let mut selected: Option<(TimerCallback, usize)> = None;
+            let mut i = 0usize;
+            while i < QOS_TIMER_MAX {
+                let entry = &mut state.entries[i];
+                if entry.used != 0 && entry.pending != 0 && entry.expires <= now {
+                    let cb = match entry.callback {
+                        Some(v) => v,
+                        None => {
+                            entry.pending = 0;
+                            i += 1;
+                            continue;
+                        }
+                    };
+                    let ctx = entry.ctx;
+                    entry.pending = 0;
+                    if entry.periodic != 0 && entry.interval != 0 {
+                        let step = entry.interval as u64;
+                        while entry.expires <= now {
+                            entry.expires = entry.expires.saturating_add(step);
+                        }
+                    } else {
+                        *entry = TimerEntry::new();
+                    }
+                    selected = Some((cb, ctx));
+                    break;
+                }
+                i += 1;
+            }
+            selected
+        };
+        timer_unlock();
+
+        let (cb, ctx) = match task {
+            Some(v) => v,
+            None => break,
+        };
+        cb(ctx);
+    }
+}
+
+pub fn timer_reset() {
+    timer_lock();
+    *timer_state_mut() = TimerState::new();
+    timer_unlock();
+}
+
+pub fn timer_jiffies() -> u64 {
+    timer_lock();
+    let now = timer_state().jiffies;
+    timer_unlock();
+    now
+}
+
+pub fn timer_add(delay_ticks: u32, interval_ticks: u32, callback: TimerCallback, ctx: usize) -> Option<i32> {
+    if delay_ticks == 0 {
+        return None;
+    }
+    timer_lock();
+    let out = {
+        let state = timer_state_mut();
+        let mut i = 0usize;
+        let mut timer_id = None;
+        while i < QOS_TIMER_MAX {
+            if state.entries[i].used == 0 {
+                state.entries[i].used = 1;
+                state.entries[i].periodic = if interval_ticks == 0 { 0 } else { 1 };
+                state.entries[i].pending = 0;
+                state.entries[i].expires = state.jiffies.saturating_add(delay_ticks as u64);
+                state.entries[i].interval = interval_ticks;
+                state.entries[i].callback = Some(callback);
+                state.entries[i].ctx = ctx;
+                timer_id = Some((i + 1) as i32);
+                break;
+            }
+            i += 1;
+        }
+        timer_id
+    };
+    timer_unlock();
+    out
+}
+
+pub fn timer_cancel(timer_id: i32) -> bool {
+    if !timer_id_valid(timer_id) {
+        return false;
+    }
+    timer_lock();
+    let ok = {
+        let state = timer_state_mut();
+        let idx = (timer_id - 1) as usize;
+        if state.entries[idx].used == 0 {
+            false
+        } else {
+            state.entries[idx] = TimerEntry::new();
+            true
+        }
+    };
+    timer_unlock();
+    ok
+}
+
+pub fn timer_tick(elapsed_ticks: u32) {
+    if elapsed_ticks == 0 {
+        return;
+    }
+    let need_softirq = {
+        timer_lock();
+        let state = timer_state_mut();
+        state.jiffies = state.jiffies.saturating_add(elapsed_ticks as u64);
+        let now = state.jiffies;
+        let mut need = false;
+        let mut i = 0usize;
+        while i < QOS_TIMER_MAX {
+            let entry = &mut state.entries[i];
+            if entry.used != 0 && entry.pending == 0 && entry.expires <= now {
+                entry.pending = 1;
+                need = true;
+            }
+            i += 1;
+        }
+        need
+    };
+    timer_unlock();
+    if need_softirq {
+        let _ = softirq_raise(QOS_SOFTIRQ_TIMER);
+    }
+}
+
+pub fn timer_active_count() -> u32 {
+    timer_lock();
+    let count = {
+        let state = timer_state();
+        let mut i = 0usize;
+        let mut n = 0u32;
+        while i < QOS_TIMER_MAX {
+            if state.entries[i].used != 0 {
+                n = n.saturating_add(1);
+            }
+            i += 1;
+        }
+        n
+    };
+    timer_unlock();
+    count
+}
+
+pub fn timer_pending_count() -> u32 {
+    timer_lock();
+    let count = {
+        let state = timer_state();
+        let mut i = 0usize;
+        let mut n = 0u32;
+        while i < QOS_TIMER_MAX {
+            if state.entries[i].used != 0 && state.entries[i].pending != 0 {
+                n = n.saturating_add(1);
+            }
+            i += 1;
+        }
+        n
+    };
+    timer_unlock();
+    count
+}
+
+fn kthread_find_slot(state: &KthreadState, tid: u32) -> Option<usize> {
+    let mut i = 0usize;
+    while i < QOS_KTHREAD_MAX {
+        let entry = &state.entries[i];
+        if entry.used != 0 && entry.tid == tid {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+pub fn kthread_reset() {
+    kthread_lock();
+    *kthread_state_mut() = KthreadState::new();
+    kthread_unlock();
+}
+
+pub fn kthread_create(entry: KthreadFn, arg: usize) -> Option<u32> {
+    kthread_lock();
+    let tid = {
+        let state = kthread_state_mut();
+        let mut i = 0usize;
+        let mut out = None;
+        while i < QOS_KTHREAD_MAX {
+            if state.entries[i].used == 0 {
+                let mut tid = state.next_tid;
+                state.next_tid = state.next_tid.wrapping_add(1);
+                if tid == 0 {
+                    tid = state.next_tid;
+                    state.next_tid = state.next_tid.wrapping_add(1);
+                }
+                state.entries[i].used = 1;
+                state.entries[i].runnable = 1;
+                state.entries[i].tid = tid;
+                state.entries[i].entry = Some(entry);
+                state.entries[i].arg = arg;
+                state.entries[i].run_count = 0;
+                out = Some(tid);
+                break;
+            }
+            i += 1;
+        }
+        out
+    };
+    kthread_unlock();
+    tid
+}
+
+pub fn kthread_wake(tid: u32) -> bool {
+    if tid == 0 {
+        return false;
+    }
+    kthread_lock();
+    let ok = {
+        let state = kthread_state_mut();
+        if let Some(slot) = kthread_find_slot(state, tid) {
+            state.entries[slot].runnable = 1;
+            true
+        } else {
+            false
+        }
+    };
+    kthread_unlock();
+    ok
+}
+
+pub fn kthread_stop(tid: u32) -> bool {
+    if tid == 0 {
+        return false;
+    }
+    kthread_lock();
+    let ok = {
+        let state = kthread_state_mut();
+        if let Some(slot) = kthread_find_slot(state, tid) {
+            state.entries[slot].runnable = 0;
+            true
+        } else {
+            false
+        }
+    };
+    kthread_unlock();
+    ok
+}
+
+pub fn kthread_count() -> u32 {
+    kthread_lock();
+    let count = {
+        let state = kthread_state();
+        let mut i = 0usize;
+        let mut n = 0u32;
+        while i < QOS_KTHREAD_MAX {
+            if state.entries[i].used != 0 {
+                n = n.saturating_add(1);
+            }
+            i += 1;
+        }
+        n
+    };
+    kthread_unlock();
+    count
+}
+
+pub fn kthread_run_count(tid: u32) -> u32 {
+    if tid == 0 {
+        return 0;
+    }
+    kthread_lock();
+    let count = {
+        let state = kthread_state();
+        match kthread_find_slot(state, tid) {
+            Some(slot) => state.entries[slot].run_count,
+            None => 0,
+        }
+    };
+    kthread_unlock();
+    count
+}
+
+pub fn kthread_run_next() -> u32 {
+    let selected = {
+        kthread_lock();
+        let state = kthread_state_mut();
+        let mut scanned = 0usize;
+        let mut out = None;
+        while scanned < QOS_KTHREAD_MAX {
+            let idx = ((state.cursor as usize) + scanned) % QOS_KTHREAD_MAX;
+            let entry = &mut state.entries[idx];
+            if entry.used != 0 && entry.runnable != 0 {
+                let fn_ptr = match entry.entry {
+                    Some(v) => v,
+                    None => {
+                        scanned += 1;
+                        continue;
+                    }
+                };
+                entry.run_count = entry.run_count.saturating_add(1);
+                state.cursor = ((idx + 1) % QOS_KTHREAD_MAX) as u32;
+                out = Some((entry.tid, fn_ptr, entry.arg));
+                break;
+            }
+            scanned += 1;
+        }
+        out
+    };
+    kthread_unlock();
+
+    if let Some((tid, fn_ptr, arg)) = selected {
+        fn_ptr(arg);
+        tid
+    } else {
+        0
+    }
+}
+
+fn napi_find_slot(state: &NapiState, napi_id: u32) -> Option<usize> {
+    let mut i = 0usize;
+    while i < QOS_NAPI_MAX {
+        let entry = &state.entries[i];
+        if entry.used != 0 && entry.id == napi_id {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn napi_softirq_handler(_ctx: usize) {
+    let mut need_reschedule = false;
+    let mut i = 0usize;
+    while i < QOS_NAPI_MAX {
+        let maybe_poll = {
+            napi_lock();
+            let state = napi_state();
+            let entry = &state.entries[i];
+            if entry.used != 0 && entry.scheduled != 0 {
+                let weight = if entry.weight == 0 { 1 } else { entry.weight };
+                entry.poll.map(|poll| (poll, entry.ctx, weight))
+            } else {
+                None
+            }
+        };
+        napi_unlock();
+
+        if let Some((poll, ctx, weight)) = maybe_poll {
+            let work = poll(ctx, weight);
+            napi_lock();
+            {
+                let state = napi_state_mut();
+                let entry = &mut state.entries[i];
+                if entry.used != 0 {
+                    entry.run_count = entry.run_count.saturating_add(1);
+                    if work < weight {
+                        entry.scheduled = 0;
+                    } else {
+                        need_reschedule = true;
+                    }
+                }
+            }
+            napi_unlock();
+        }
+        i += 1;
+    }
+
+    if need_reschedule {
+        let _ = softirq_raise(QOS_SOFTIRQ_NET_RX);
+    }
+}
+
+pub fn napi_reset() {
+    napi_lock();
+    *napi_state_mut() = NapiState::new();
+    napi_unlock();
+}
+
+pub fn napi_register(weight: u32, poll: NapiPoll, ctx: usize) -> Option<u32> {
+    if weight == 0 {
+        return None;
+    }
+    napi_lock();
+    let id = {
+        let state = napi_state_mut();
+        let mut i = 0usize;
+        let mut out = None;
+        while i < QOS_NAPI_MAX {
+            if state.entries[i].used == 0 {
+                let mut id = state.next_id;
+                state.next_id = state.next_id.wrapping_add(1);
+                if id == 0 {
+                    id = state.next_id;
+                    state.next_id = state.next_id.wrapping_add(1);
+                }
+                state.entries[i].used = 1;
+                state.entries[i].scheduled = 0;
+                state.entries[i].id = id;
+                state.entries[i].weight = weight;
+                state.entries[i].poll = Some(poll);
+                state.entries[i].ctx = ctx;
+                state.entries[i].run_count = 0;
+                out = Some(id);
+                break;
+            }
+            i += 1;
+        }
+        out
+    };
+    napi_unlock();
+    id
+}
+
+pub fn napi_schedule(napi_id: u32) -> bool {
+    if napi_id == 0 {
+        return false;
+    }
+    let found = {
+        napi_lock();
+        let state = napi_state_mut();
+        if let Some(slot) = napi_find_slot(state, napi_id) {
+            state.entries[slot].scheduled = 1;
+            true
+        } else {
+            false
+        }
+    };
+    napi_unlock();
+    if !found {
+        return false;
+    }
+    softirq_raise(QOS_SOFTIRQ_NET_RX)
+}
+
+pub fn napi_complete(napi_id: u32) -> bool {
+    if napi_id == 0 {
+        return false;
+    }
+    napi_lock();
+    let ok = {
+        let state = napi_state_mut();
+        if let Some(slot) = napi_find_slot(state, napi_id) {
+            state.entries[slot].scheduled = 0;
+            true
+        } else {
+            false
+        }
+    };
+    napi_unlock();
+    ok
+}
+
+pub fn napi_pending_count() -> u32 {
+    napi_lock();
+    let count = {
+        let state = napi_state();
+        let mut i = 0usize;
+        let mut n = 0u32;
+        while i < QOS_NAPI_MAX {
+            if state.entries[i].used != 0 && state.entries[i].scheduled != 0 {
+                n = n.saturating_add(1);
+            }
+            i += 1;
+        }
+        n
+    };
+    napi_unlock();
+    count
+}
+
+pub fn napi_run_count(napi_id: u32) -> u32 {
+    if napi_id == 0 {
+        return 0;
+    }
+    napi_lock();
+    let count = {
+        let state = napi_state();
+        match napi_find_slot(state, napi_id) {
+            Some(slot) => state.entries[slot].run_count,
+            None => 0,
+        }
+    };
+    napi_unlock();
+    count
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DriverNicDesc {
     pub mmio_base: u64,
@@ -2246,6 +3175,12 @@ pub fn syscall_register(nr: u32, op: u32, value: i64) -> bool {
         && op != SYSCALL_OP_GETDENTS
         && op != SYSCALL_OP_LSEEK
         && op != SYSCALL_OP_PIPE
+        && op != SYSCALL_OP_DLOPEN
+        && op != SYSCALL_OP_DLCLOSE
+        && op != SYSCALL_OP_DLSYM
+        && op != SYSCALL_OP_MODLOAD
+        && op != SYSCALL_OP_MODUNLOAD
+        && op != SYSCALL_OP_MODRELOAD
     {
         return false;
     }
@@ -2570,6 +3505,418 @@ fn syscall_file_maybe_gc(state: &mut SyscallState, file_id: usize) {
         return;
     }
     syscall_file_drop(state, file_id);
+}
+
+fn elf_u16(image: &[u8], off: usize) -> Option<u16> {
+    if off + 2 > image.len() {
+        return None;
+    }
+    Some((image[off] as u16) | ((image[off + 1] as u16) << 8))
+}
+
+fn elf_u32(image: &[u8], off: usize) -> Option<u32> {
+    if off + 4 > image.len() {
+        return None;
+    }
+    Some(
+        (image[off] as u32)
+            | ((image[off + 1] as u32) << 8)
+            | ((image[off + 2] as u32) << 16)
+            | ((image[off + 3] as u32) << 24),
+    )
+}
+
+fn elf_u64(image: &[u8], off: usize) -> Option<u64> {
+    if off + 8 > image.len() {
+        return None;
+    }
+    Some(
+        (image[off] as u64)
+            | ((image[off + 1] as u64) << 8)
+            | ((image[off + 2] as u64) << 16)
+            | ((image[off + 3] as u64) << 24)
+            | ((image[off + 4] as u64) << 32)
+            | ((image[off + 5] as u64) << 40)
+            | ((image[off + 6] as u64) << 48)
+            | ((image[off + 7] as u64) << 56),
+    )
+}
+
+fn parse_exec_elf_image(image: &[u8]) -> Option<ProcExecImage> {
+    if image.len() < 64 {
+        return None;
+    }
+    if image[0] != 0x7F || image[1] != b'E' || image[2] != b'L' || image[3] != b'F' {
+        return None;
+    }
+    if image[4] != ELF_CLASS_64 || image[5] != ELF_DATA_LSB || image[6] != 1 {
+        return None;
+    }
+
+    let e_type = elf_u16(image, 16)?;
+    let e_machine = elf_u16(image, 18)?;
+    let e_entry = elf_u64(image, 24)?;
+    let e_phoff = elf_u64(image, 32)?;
+    let e_phentsize = elf_u16(image, 54)?;
+    let e_phnum = elf_u16(image, 56)?;
+    if (e_type != ELF_ET_EXEC && e_type != ELF_ET_DYN)
+        || (e_machine != ELF_EM_X86_64 && e_machine != ELF_EM_AARCH64)
+    {
+        return None;
+    }
+    if e_phnum == 0 || e_phentsize < 56 {
+        return None;
+    }
+    let phoff = e_phoff as usize;
+    let phentsize = e_phentsize as usize;
+    let phnum = e_phnum as usize;
+    if phoff > image.len() {
+        return None;
+    }
+    if phnum > (usize::MAX - phoff) / phentsize {
+        return None;
+    }
+    if phoff + phnum * phentsize > image.len() {
+        return None;
+    }
+
+    let mut load_count = 0u16;
+    let mut has_interp = false;
+    let mut interp_off = 0u64;
+    let mut interp_len = 0u64;
+    let mut i = 0usize;
+    while i < phnum {
+        let p_off = phoff + i * phentsize;
+        let p_type = elf_u32(image, p_off)?;
+        let p_offset = elf_u64(image, p_off + 8)?;
+        let p_vaddr = elf_u64(image, p_off + 16)?;
+        let p_filesz = elf_u64(image, p_off + 32)?;
+        let p_memsz = elf_u64(image, p_off + 40)?;
+        let p_align = elf_u64(image, p_off + 48)?;
+
+        if p_type == ELF_PT_LOAD {
+            if p_memsz < p_filesz {
+                return None;
+            }
+            if p_filesz != 0 {
+                let off = p_offset as usize;
+                let sz = p_filesz as usize;
+                if off > image.len() || sz > image.len() - off {
+                    return None;
+                }
+            }
+            if p_align != 0 && (p_vaddr % p_align) != (p_offset % p_align) {
+                return None;
+            }
+            load_count = load_count.saturating_add(1);
+        } else if p_type == ELF_PT_INTERP {
+            let off = p_offset as usize;
+            let sz = p_filesz as usize;
+            if sz == 0 || off > image.len() || sz > image.len() - off {
+                return None;
+            }
+            if image[off + sz - 1] != 0 {
+                return None;
+            }
+            has_interp = true;
+            interp_off = p_offset;
+            interp_len = p_filesz;
+        }
+        i += 1;
+    }
+
+    if load_count == 0 {
+        return None;
+    }
+
+    Some(ProcExecImage {
+        entry: e_entry,
+        phoff: e_phoff,
+        phentsize: e_phentsize,
+        phnum: e_phnum,
+        load_count,
+        has_interp,
+        interp_off,
+        interp_len,
+    })
+}
+
+fn parse_shared_elf_image(image: &[u8]) -> bool {
+    if image.len() < 64 {
+        return false;
+    }
+    if elf_u16(image, 16) != Some(ELF_ET_DYN) {
+        return false;
+    }
+    parse_exec_elf_image(image).is_some()
+}
+
+fn syscall_plugin_path_valid(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    !bytes.is_empty() && bytes[0] == b'/' && bytes.len() < QOS_VFS_PATH_MAX
+}
+
+fn syscall_copy_path(dst: &mut [u8; QOS_VFS_PATH_MAX], dst_len: &mut u8, path: &str) -> bool {
+    if !syscall_plugin_path_valid(path) {
+        return false;
+    }
+    let bytes = path.as_bytes();
+    *dst = [0; QOS_VFS_PATH_MAX];
+    dst[..bytes.len()].copy_from_slice(bytes);
+    *dst_len = bytes.len() as u8;
+    true
+}
+
+fn syscall_shlib_find_handle(state: &SyscallState, handle: u32) -> Option<usize> {
+    if handle == 0 {
+        return None;
+    }
+    let mut i = 0usize;
+    while i < QOS_SHLIB_MAX {
+        if state.shlib_used[i] != 0 && state.shlib_handle[i] == handle {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn syscall_shlib_find_path(state: &SyscallState, path: &str) -> Option<usize> {
+    let bytes = path.as_bytes();
+    let mut i = 0usize;
+    while i < QOS_SHLIB_MAX {
+        if state.shlib_used[i] != 0
+            && state.shlib_path_len[i] as usize == bytes.len()
+            && &state.shlib_paths[i][..bytes.len()] == bytes
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn syscall_shlib_free_slot(state: &SyscallState) -> Option<usize> {
+    let mut i = 0usize;
+    while i < QOS_SHLIB_MAX {
+        if state.shlib_used[i] == 0 {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn syscall_shlib_next_handle(state: &mut SyscallState) -> u32 {
+    let mut handle = state.shlib_next_handle;
+    state.shlib_next_handle = state.shlib_next_handle.wrapping_add(1);
+    if handle == 0 {
+        handle = state.shlib_next_handle;
+        state.shlib_next_handle = state.shlib_next_handle.wrapping_add(1);
+    }
+    if handle == 0 {
+        handle = 1;
+        state.shlib_next_handle = 2;
+    }
+    handle
+}
+
+fn syscall_shlib_load(state: &mut SyscallState, path: &str, force_new: bool) -> Option<u32> {
+    if !syscall_plugin_path_valid(path) {
+        return None;
+    }
+    if !force_new {
+        if let Some(slot) = syscall_shlib_find_path(state, path) {
+            state.shlib_refcount[slot] = state.shlib_refcount[slot].saturating_add(1);
+            return Some(state.shlib_handle[slot]);
+        }
+    }
+
+    let file_id = syscall_file_find(state, path)?;
+    if state.file_used[file_id] == 0 {
+        return None;
+    }
+    let len = state.file_len[file_id] as usize;
+    if len == 0 || !parse_shared_elf_image(&state.file_data[file_id][..len]) {
+        return None;
+    }
+
+    let slot = syscall_shlib_free_slot(state)?;
+    let handle = syscall_shlib_next_handle(state);
+    state.shlib_used[slot] = 1;
+    state.shlib_handle[slot] = handle;
+    state.shlib_refcount[slot] = 1;
+    state.shlib_file_id[slot] = file_id as u16;
+    if !syscall_copy_path(&mut state.shlib_paths[slot], &mut state.shlib_path_len[slot], path) {
+        state.shlib_used[slot] = 0;
+        state.shlib_handle[slot] = 0;
+        state.shlib_refcount[slot] = 0;
+        state.shlib_file_id[slot] = u16::MAX;
+        state.shlib_paths[slot] = [0; QOS_VFS_PATH_MAX];
+        state.shlib_path_len[slot] = 0;
+        return None;
+    }
+    Some(handle)
+}
+
+fn syscall_shlib_release(state: &mut SyscallState, handle: u32) -> bool {
+    let slot = match syscall_shlib_find_handle(state, handle) {
+        Some(v) => v,
+        None => return false,
+    };
+    if state.shlib_refcount[slot] == 0 {
+        return false;
+    }
+    state.shlib_refcount[slot] -= 1;
+    if state.shlib_refcount[slot] == 0 {
+        state.shlib_used[slot] = 0;
+        state.shlib_handle[slot] = 0;
+        state.shlib_refcount[slot] = 0;
+        state.shlib_file_id[slot] = u16::MAX;
+        state.shlib_paths[slot] = [0; QOS_VFS_PATH_MAX];
+        state.shlib_path_len[slot] = 0;
+    }
+    true
+}
+
+fn syscall_module_find_id(state: &SyscallState, module_id: u32) -> Option<usize> {
+    if module_id == 0 {
+        return None;
+    }
+    let mut i = 0usize;
+    while i < QOS_MODULE_MAX {
+        if state.module_used[i] != 0 && state.module_id[i] == module_id {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn syscall_module_find_path(state: &SyscallState, path: &str) -> Option<usize> {
+    let bytes = path.as_bytes();
+    let mut i = 0usize;
+    while i < QOS_MODULE_MAX {
+        if state.module_used[i] != 0
+            && state.module_path_len[i] as usize == bytes.len()
+            && &state.module_paths[i][..bytes.len()] == bytes
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn syscall_module_free_slot(state: &SyscallState) -> Option<usize> {
+    let mut i = 0usize;
+    while i < QOS_MODULE_MAX {
+        if state.module_used[i] == 0 {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn syscall_module_next_id(state: &mut SyscallState) -> u32 {
+    let mut id = state.module_next_id;
+    state.module_next_id = state.module_next_id.wrapping_add(1);
+    if id == 0 {
+        id = state.module_next_id;
+        state.module_next_id = state.module_next_id.wrapping_add(1);
+    }
+    if id == 0 {
+        id = 1;
+        state.module_next_id = 2;
+    }
+    id
+}
+
+fn syscall_module_load(state: &mut SyscallState, path: &str) -> Option<u32> {
+    if !syscall_plugin_path_valid(path) {
+        return None;
+    }
+    if let Some(slot) = syscall_module_find_path(state, path) {
+        return Some(state.module_id[slot]);
+    }
+    let handle = syscall_shlib_load(state, path, false)?;
+    let slot = match syscall_module_free_slot(state) {
+        Some(v) => v,
+        None => {
+            let _ = syscall_shlib_release(state, handle);
+            return None;
+        }
+    };
+    let module_id = syscall_module_next_id(state);
+    state.module_used[slot] = 1;
+    state.module_id[slot] = module_id;
+    state.module_generation[slot] = 1;
+    state.module_shlib_handle[slot] = handle;
+    if !syscall_copy_path(&mut state.module_paths[slot], &mut state.module_path_len[slot], path) {
+        state.module_used[slot] = 0;
+        state.module_id[slot] = 0;
+        state.module_generation[slot] = 0;
+        state.module_shlib_handle[slot] = 0;
+        let _ = syscall_shlib_release(state, handle);
+        return None;
+    }
+    Some(module_id)
+}
+
+fn syscall_module_unload(state: &mut SyscallState, module_id: u32) -> bool {
+    let slot = match syscall_module_find_id(state, module_id) {
+        Some(v) => v,
+        None => return false,
+    };
+    let handle = state.module_shlib_handle[slot];
+    state.module_used[slot] = 0;
+    state.module_id[slot] = 0;
+    state.module_generation[slot] = 0;
+    state.module_shlib_handle[slot] = 0;
+    state.module_paths[slot] = [0; QOS_VFS_PATH_MAX];
+    state.module_path_len[slot] = 0;
+    if handle != 0 {
+        let _ = syscall_shlib_release(state, handle);
+    }
+    true
+}
+
+fn syscall_module_reload(state: &mut SyscallState, module_id: u32) -> Option<u32> {
+    let slot = syscall_module_find_id(state, module_id)?;
+    let mut path_buf = [0u8; QOS_VFS_PATH_MAX];
+    let path_len = state.module_path_len[slot] as usize;
+    if path_len == 0 || path_len >= QOS_VFS_PATH_MAX {
+        return None;
+    }
+    path_buf[..path_len].copy_from_slice(&state.module_paths[slot][..path_len]);
+    let path = core::str::from_utf8(&path_buf[..path_len]).ok()?;
+
+    let new_handle = syscall_shlib_load(state, path, true)?;
+    let old_handle = state.module_shlib_handle[slot];
+    state.module_shlib_handle[slot] = new_handle;
+    state.module_generation[slot] = state.module_generation[slot].saturating_add(1);
+    if state.module_generation[slot] == 0 {
+        state.module_generation[slot] = 1;
+    }
+    if old_handle != 0 {
+        let _ = syscall_shlib_release(state, old_handle);
+    }
+    Some(state.module_generation[slot])
+}
+
+fn symbol_hash32(name: &str) -> u32 {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() {
+        return 0;
+    }
+    let mut hash = 5381u32;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        hash = ((hash << 5).wrapping_add(hash)) ^ bytes[i] as u32;
+        i += 1;
+    }
+    hash
 }
 
 fn syscall_fd_clear(state: &mut SyscallState, fd: u32) {
@@ -3788,7 +5135,87 @@ pub fn syscall_dispatch(nr: u32, a0: u64, a1: u64, a2: u64, a3: u64) -> i64 {
         }
 
         if state.ops[idx] as u32 == SYSCALL_OP_EXEC {
-            return if proc_exec_signal_reset(a0 as u32) { 0 } else { -1 };
+            if a1 == 0 {
+                return if proc_exec_signal_reset(a0 as u32) { 0 } else { -1 };
+            }
+            let c_path = unsafe { CStr::from_ptr(a1 as *const core::ffi::c_char) };
+            let path = match c_path.to_str() {
+                Ok(p) => p,
+                Err(_) => return -1,
+            };
+            let file_id = match syscall_file_find(state, path) {
+                Some(i) => i,
+                None => return -1,
+            };
+            let len = state.file_len[file_id] as usize;
+            if len == 0 {
+                return -1;
+            }
+            let image = match parse_exec_elf_image(&state.file_data[file_id][..len]) {
+                Some(v) => v,
+                None => return -1,
+            };
+            if !proc_exec_signal_reset(a0 as u32) || !proc_exec_image_set(a0 as u32, image) {
+                return -1;
+            }
+            return 0;
+        }
+
+        if state.ops[idx] as u32 == SYSCALL_OP_DLOPEN {
+            if a0 == 0 {
+                return -1;
+            }
+            let c_path = unsafe { CStr::from_ptr(a0 as *const core::ffi::c_char) };
+            let path = match c_path.to_str() {
+                Ok(p) => p,
+                Err(_) => return -1,
+            };
+            return syscall_shlib_load(state, path, false).map_or(-1, |h| h as i64);
+        }
+
+        if state.ops[idx] as u32 == SYSCALL_OP_DLCLOSE {
+            return if syscall_shlib_release(state, a0 as u32) { 0 } else { -1 };
+        }
+
+        if state.ops[idx] as u32 == SYSCALL_OP_DLSYM {
+            if a1 == 0 {
+                return -1;
+            }
+            let handle = a0 as u32;
+            if syscall_shlib_find_handle(state, handle).is_none() {
+                return -1;
+            }
+            let c_name = unsafe { CStr::from_ptr(a1 as *const core::ffi::c_char) };
+            let name = match c_name.to_str() {
+                Ok(v) => v,
+                Err(_) => return -1,
+            };
+            let hash = symbol_hash32(name);
+            if hash == 0 {
+                return -1;
+            }
+            let addr = 0x7000_0000_0000_0000u64 | ((handle as u64) << 24) | ((hash & 0x00FF_FFFF) as u64);
+            return addr as i64;
+        }
+
+        if state.ops[idx] as u32 == SYSCALL_OP_MODLOAD {
+            if a0 == 0 {
+                return -1;
+            }
+            let c_path = unsafe { CStr::from_ptr(a0 as *const core::ffi::c_char) };
+            let path = match c_path.to_str() {
+                Ok(p) => p,
+                Err(_) => return -1,
+            };
+            return syscall_module_load(state, path).map_or(-1, |id| id as i64);
+        }
+
+        if state.ops[idx] as u32 == SYSCALL_OP_MODUNLOAD {
+            return if syscall_module_unload(state, a0 as u32) { 0 } else { -1 };
+        }
+
+        if state.ops[idx] as u32 == SYSCALL_OP_MODRELOAD {
+            return syscall_module_reload(state, a0 as u32).map_or(-1, |generation| generation as i64);
         }
 
         if state.ops[idx] as u32 == SYSCALL_OP_EXIT {
@@ -3976,6 +5403,29 @@ fn proc_cwd_set_idx(state: &mut ProcState, idx: usize, path: &str) -> bool {
     true
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProcExecImage {
+    pub entry: u64,
+    pub phoff: u64,
+    pub phentsize: u16,
+    pub phnum: u16,
+    pub load_count: u16,
+    pub has_interp: bool,
+    pub interp_off: u64,
+    pub interp_len: u64,
+}
+
+fn proc_exec_image_clear_idx(state: &mut ProcState, idx: usize) {
+    state.exec_entry[idx] = 0;
+    state.exec_phoff[idx] = 0;
+    state.exec_phentsize[idx] = 0;
+    state.exec_phnum[idx] = 0;
+    state.exec_load_count[idx] = 0;
+    state.exec_has_interp[idx] = 0;
+    state.exec_interp_off[idx] = 0;
+    state.exec_interp_len[idx] = 0;
+}
+
 pub fn proc_reset() {
     proc_lock();
     *proc_state_mut() = ProcState::new();
@@ -4011,6 +5461,7 @@ pub fn proc_create(pid: u32, ppid: u32) -> bool {
         state.sig_altstack_sp[slot] = 0;
         state.sig_altstack_size[slot] = 0;
         state.sig_altstack_flags[slot] = 0;
+        proc_exec_image_clear_idx(state, slot);
         state.count += 1;
         true
     })();
@@ -4039,6 +5490,7 @@ pub fn proc_remove(pid: u32) -> bool {
         state.sig_altstack_sp[idx] = 0;
         state.sig_altstack_size[idx] = 0;
         state.sig_altstack_flags[idx] = 0;
+        proc_exec_image_clear_idx(state, idx);
         state.count -= 1;
         true
     })();
@@ -4233,6 +5685,14 @@ pub fn proc_fork(parent_pid: u32, child_pid: u32) -> bool {
         state.sig_altstack_sp[child_idx] = state.sig_altstack_sp[parent_idx];
         state.sig_altstack_size[child_idx] = state.sig_altstack_size[parent_idx];
         state.sig_altstack_flags[child_idx] = state.sig_altstack_flags[parent_idx];
+        state.exec_entry[child_idx] = state.exec_entry[parent_idx];
+        state.exec_phoff[child_idx] = state.exec_phoff[parent_idx];
+        state.exec_phentsize[child_idx] = state.exec_phentsize[parent_idx];
+        state.exec_phnum[child_idx] = state.exec_phnum[parent_idx];
+        state.exec_load_count[child_idx] = state.exec_load_count[parent_idx];
+        state.exec_has_interp[child_idx] = state.exec_has_interp[parent_idx];
+        state.exec_interp_off[child_idx] = state.exec_interp_off[parent_idx];
+        state.exec_interp_len[child_idx] = state.exec_interp_len[parent_idx];
         state.count += 1;
         true
     })();
@@ -4326,6 +5786,7 @@ fn proc_wait_inner(state: &mut ProcState, parent_pid: u32, pid: i32, options: u3
     state.sig_altstack_sp[idx] = 0;
     state.sig_altstack_size[idx] = 0;
     state.sig_altstack_flags[idx] = 0;
+    proc_exec_image_clear_idx(state, idx);
     state.count -= 1;
     (child_pid, status, true)
 }
@@ -4407,6 +5868,48 @@ pub fn proc_exec_signal_reset(pid: u32) -> bool {
     })();
     proc_unlock();
     ok
+}
+
+pub fn proc_exec_image_set(pid: u32, image: ProcExecImage) -> bool {
+    proc_lock();
+    let ok = (|| {
+        let state = proc_state_mut();
+        let idx = match proc_find(state, pid) {
+            Some(i) => i,
+            None => return false,
+        };
+        state.exec_entry[idx] = image.entry;
+        state.exec_phoff[idx] = image.phoff;
+        state.exec_phentsize[idx] = image.phentsize;
+        state.exec_phnum[idx] = image.phnum;
+        state.exec_load_count[idx] = image.load_count;
+        state.exec_has_interp[idx] = if image.has_interp { 1 } else { 0 };
+        state.exec_interp_off[idx] = image.interp_off;
+        state.exec_interp_len[idx] = image.interp_len;
+        true
+    })();
+    proc_unlock();
+    ok
+}
+
+pub fn proc_exec_image_get(pid: u32) -> Option<ProcExecImage> {
+    proc_lock();
+    let img = (|| {
+        let state = proc_state();
+        let idx = proc_find(state, pid)?;
+        Some(ProcExecImage {
+            entry: state.exec_entry[idx],
+            phoff: state.exec_phoff[idx],
+            phentsize: state.exec_phentsize[idx],
+            phnum: state.exec_phnum[idx],
+            load_count: state.exec_load_count[idx],
+            has_interp: state.exec_has_interp[idx] != 0,
+            interp_off: state.exec_interp_off[idx],
+            interp_len: state.exec_interp_len[idx],
+        })
+    })();
+    proc_unlock();
+    img
 }
 
 pub fn proc_signal_set_handler(pid: u32, signum: u32, handler: u32) -> bool {
@@ -4612,6 +6115,10 @@ pub fn kernel_entry(boot_info: &BootInfo) -> Result<(), KernelError> {
     drivers_init();
     vfs_init();
     net_init();
+    softirq_init();
+    timer_init();
+    napi_init();
+    kthread_init();
     sched_init();
     syscall_init();
     proc_init();

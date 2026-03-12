@@ -62,6 +62,12 @@ extern int qos_proc_signal_altstack_get(uint32_t pid, void *out_altstack);
 #define QOS_LIBC_SYSCALL_NR_MKDIR 22u
 #define QOS_LIBC_SYSCALL_NR_CHDIR 27u
 #define QOS_LIBC_SYSCALL_NR_GETCWD 28u
+#define QOS_LIBC_SYSCALL_NR_DLOPEN 36u
+#define QOS_LIBC_SYSCALL_NR_DLCLOSE 37u
+#define QOS_LIBC_SYSCALL_NR_DLSYM 38u
+#define QOS_LIBC_SYSCALL_NR_MODLOAD 39u
+#define QOS_LIBC_SYSCALL_NR_MODUNLOAD 40u
+#define QOS_LIBC_SYSCALL_NR_MODRELOAD 41u
 
 #define QOS_LIBC_HEAP_BYTES (1u << 20)
 #define QOS_LIBC_HEAP_ALIGN 16u
@@ -1332,6 +1338,78 @@ int qos_waitpid(int pid, int *status, int options) {
     rc = -1;
 #endif
     return rc < 0 ? -1 : (int)rc;
+}
+
+void *qos_dlopen(const char *path, int flags) {
+    int used = 0;
+    int64_t rc;
+    if (path == 0) {
+        return 0;
+    }
+    rc = qos_libc_syscall4(QOS_LIBC_SYSCALL_NR_DLOPEN, (uint64_t)(uintptr_t)path, (uint64_t)(uint32_t)flags, 0, 0, &used);
+    if (used != 0) {
+        return rc < 0 ? 0 : (void *)(uintptr_t)(uint64_t)rc;
+    }
+    return 0;
+}
+
+int qos_dlclose(void *handle) {
+    int used = 0;
+    int64_t rc;
+    if (handle == 0) {
+        return -1;
+    }
+    rc = qos_libc_syscall4(QOS_LIBC_SYSCALL_NR_DLCLOSE, (uint64_t)(uintptr_t)handle, 0, 0, 0, &used);
+    if (used != 0) {
+        return rc < 0 ? -1 : (int)rc;
+    }
+    return -1;
+}
+
+void *qos_dlsym(void *handle, const char *symbol) {
+    int used = 0;
+    int64_t rc;
+    if (handle == 0 || symbol == 0) {
+        return 0;
+    }
+    rc = qos_libc_syscall4(QOS_LIBC_SYSCALL_NR_DLSYM, (uint64_t)(uintptr_t)handle, (uint64_t)(uintptr_t)symbol, 0, 0, &used);
+    if (used != 0) {
+        return rc < 0 ? 0 : (void *)(uintptr_t)(uint64_t)rc;
+    }
+    return 0;
+}
+
+int qos_modload(const char *path) {
+    int used = 0;
+    int64_t rc;
+    if (path == 0) {
+        return -1;
+    }
+    rc = qos_libc_syscall4(QOS_LIBC_SYSCALL_NR_MODLOAD, (uint64_t)(uintptr_t)path, 0, 0, 0, &used);
+    if (used != 0) {
+        return rc < 0 ? -1 : (int)rc;
+    }
+    return -1;
+}
+
+int qos_modunload(int module_id) {
+    int used = 0;
+    int64_t rc;
+    rc = qos_libc_syscall4(QOS_LIBC_SYSCALL_NR_MODUNLOAD, (uint64_t)(uint32_t)module_id, 0, 0, 0, &used);
+    if (used != 0) {
+        return rc < 0 ? -1 : (int)rc;
+    }
+    return -1;
+}
+
+int qos_modreload(int module_id) {
+    int used = 0;
+    int64_t rc;
+    rc = qos_libc_syscall4(QOS_LIBC_SYSCALL_NR_MODRELOAD, (uint64_t)(uint32_t)module_id, 0, 0, 0, &used);
+    if (used != 0) {
+        return rc < 0 ? -1 : (int)rc;
+    }
+    return -1;
 }
 
 void qos_abort(void) {

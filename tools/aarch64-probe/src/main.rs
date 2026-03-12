@@ -8,7 +8,12 @@ use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 use core::sync::atomic::{fence, Ordering};
 use qos_boot::boot_info::{BootInfo, MmapEntry, QOS_BOOT_MAGIC};
 use qos_kernel::{
-    kernel_entry, net_icmp_echo, proc_create, proc_fork, QOS_NET_IPV4_GATEWAY, QOS_NET_IPV4_LOCAL,
+    kernel_entry, net_icmp_echo, proc_create, proc_fork, syscall_dispatch, QOS_NET_IPV4_GATEWAY,
+    QOS_NET_IPV4_LOCAL, SYSCALL_NR_CLOSE, SYSCALL_NR_LSEEK, SYSCALL_NR_MKDIR, SYSCALL_NR_OPEN,
+    SYSCALL_NR_QUERY_DRIVERS_COUNT, SYSCALL_NR_QUERY_INIT_STATE, SYSCALL_NR_QUERY_NET_QUEUE_LEN,
+    SYSCALL_NR_QUERY_PMM_FREE, SYSCALL_NR_QUERY_PMM_TOTAL, SYSCALL_NR_QUERY_PROC_COUNT,
+    SYSCALL_NR_QUERY_SCHED_COUNT, SYSCALL_NR_QUERY_SYSCALL_COUNT, SYSCALL_NR_QUERY_VFS_COUNT,
+    SYSCALL_NR_READ, SYSCALL_NR_STAT, SYSCALL_NR_UNLINK, SYSCALL_NR_WRITE,
 };
 
 const UART0: *mut u32 = 0x0900_0000 as *mut u32;
@@ -79,6 +84,18 @@ const ICMP_REAL_STAGE_QUEUE: u32 = 3;
 const ICMP_REAL_STAGE_TIMEOUT: u32 = 4;
 const ICMP_REAL_STAGE_TX: u32 = 5;
 const SHELL_LINE_MAX: usize = 128;
+const SHELL_FILE_MAX: usize = 64;
+const SHELL_PATH_MAX: usize = 128;
+const SHELL_IO_MAX: usize = 2048;
+
+#[no_mangle]
+static mut SHELL_FILE_PATHS: [[u8; SHELL_PATH_MAX]; SHELL_FILE_MAX] = [[0; SHELL_PATH_MAX]; SHELL_FILE_MAX];
+
+#[no_mangle]
+static mut SHELL_FILE_PATH_LENS: [u8; SHELL_FILE_MAX] = [0; SHELL_FILE_MAX];
+
+#[no_mangle]
+static mut SHELL_FILE_USED: [u8; SHELL_FILE_MAX] = [0; SHELL_FILE_MAX];
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -184,6 +201,24 @@ fn uart_getc() -> u8 {
     }
 }
 
+fn uart_put_u32(mut value: u32) {
+    let mut buf = [0u8; 10];
+    let mut n = 0usize;
+    if value == 0 {
+        uart_putc(b'0');
+        return;
+    }
+    while value != 0 {
+        buf[n] = b'0' + (value % 10) as u8;
+        value /= 10;
+        n += 1;
+    }
+    while n != 0 {
+        n -= 1;
+        uart_putc(buf[n]);
+    }
+}
+
 fn shell_print_ping_ok(host: &[u8]) {
     uart_puts("PING ");
     uart_put_bytes(host);
@@ -198,13 +233,272 @@ fn shell_print_ping_unreachable(host: &[u8]) {
     uart_puts("\nFrom 10.0.2.15 icmp_seq=1 Destination Host Unreachable\n1 packets transmitted, 0 received\n");
 }
 
+fn trim_ascii_spaces(mut s: &[u8]) -> &[u8] {
+    while let Some((&b, rest)) = s.split_first() {
+        if b == b' ' || b == b'\t' {
+            s = rest;
+        } else {
+            break;
+        }
+    }
+    s
+}
+
+fn copy_cstr_path(buf: &mut [u8; SHELL_PATH_MAX], path: &[u8]) -> bool {
+    if path.is_empty() || path[0] != b'/' || path.len() + 1 > SHELL_PATH_MAX {
+        return false;
+    }
+    let mut i = 0usize;
+    while i < path.len() {
+        if path[i] == 0 {
+            return false;
+        }
+        buf[i] = path[i];
+        i += 1;
+    }
+    buf[i] = 0;
+    true
+}
+
+fn shell_track_file(path: &[u8]) {
+    if path.is_empty() || path[0] != b'/' || path.len() > (SHELL_PATH_MAX - 1) {
+        return;
+    }
+    unsafe {
+        let mut i = 0usize;
+        while i < SHELL_FILE_MAX {
+            if SHELL_FILE_USED[i] != 0 {
+                let len = SHELL_FILE_PATH_LENS[i] as usize;
+                if len == path.len() && &SHELL_FILE_PATHS[i][..len] == path {
+                    return;
+                }
+            }
+            i += 1;
+        }
+        i = 0;
+        while i < SHELL_FILE_MAX {
+            if SHELL_FILE_USED[i] == 0 {
+                SHELL_FILE_USED[i] = 1;
+                SHELL_FILE_PATH_LENS[i] = path.len() as u8;
+                SHELL_FILE_PATHS[i][..path.len()].copy_from_slice(path);
+                SHELL_FILE_PATHS[i][path.len()] = 0;
+                return;
+            }
+            i += 1;
+        }
+    }
+}
+
+fn shell_path_exists(path: &[u8]) -> bool {
+    let mut c_path = [0u8; SHELL_PATH_MAX];
+    let mut st = [0u64; 2];
+    if !copy_cstr_path(&mut c_path, path) {
+        return false;
+    }
+    syscall_dispatch(
+        SYSCALL_NR_STAT,
+        c_path.as_ptr() as u64,
+        st.as_mut_ptr() as u64,
+        0,
+        0,
+    ) == 0
+}
+
+fn shell_touch_path(path: &[u8]) -> bool {
+    let mut c_path = [0u8; SHELL_PATH_MAX];
+    if !copy_cstr_path(&mut c_path, path) {
+        return false;
+    }
+    if !shell_path_exists(path) && syscall_dispatch(SYSCALL_NR_MKDIR, c_path.as_ptr() as u64, 0, 0, 0) != 0 {
+        return false;
+    }
+    let fd = syscall_dispatch(SYSCALL_NR_OPEN, c_path.as_ptr() as u64, 0, 0, 0);
+    if fd < 0 {
+        return false;
+    }
+    let _ = syscall_dispatch(SYSCALL_NR_CLOSE, fd as u64, 0, 0, 0);
+    shell_track_file(path);
+    true
+}
+
+fn shell_write_file(path: &[u8], content: &[u8], append: bool) -> bool {
+    let mut c_path = [0u8; SHELL_PATH_MAX];
+    if !copy_cstr_path(&mut c_path, path) {
+        return false;
+    }
+    if !append && shell_path_exists(path) {
+        let _ = syscall_dispatch(SYSCALL_NR_UNLINK, c_path.as_ptr() as u64, 0, 0, 0);
+    }
+    if !shell_touch_path(path) {
+        return false;
+    }
+    let fd = syscall_dispatch(SYSCALL_NR_OPEN, c_path.as_ptr() as u64, 0, 0, 0);
+    if fd < 0 {
+        return false;
+    }
+    if append {
+        let _ = syscall_dispatch(SYSCALL_NR_LSEEK, fd as u64, 0, 2, 0);
+    }
+    if !content.is_empty() {
+        let wr = syscall_dispatch(
+            SYSCALL_NR_WRITE,
+            fd as u64,
+            content.as_ptr() as u64,
+            content.len() as u64,
+            0,
+        );
+        if wr < 0 {
+            let _ = syscall_dispatch(SYSCALL_NR_CLOSE, fd as u64, 0, 0, 0);
+            return false;
+        }
+    }
+    let _ = syscall_dispatch(SYSCALL_NR_CLOSE, fd as u64, 0, 0, 0);
+    shell_track_file(path);
+    true
+}
+
+fn shell_read_file(path: &[u8], out: &mut [u8; SHELL_IO_MAX]) -> Option<usize> {
+    let mut c_path = [0u8; SHELL_PATH_MAX];
+    if !copy_cstr_path(&mut c_path, path) {
+        return None;
+    }
+    let fd = syscall_dispatch(SYSCALL_NR_OPEN, c_path.as_ptr() as u64, 0, 0, 0);
+    if fd < 0 {
+        return None;
+    }
+    let mut total = 0usize;
+    while total < out.len() {
+        let rd = syscall_dispatch(
+            SYSCALL_NR_READ,
+            fd as u64,
+            out[total..].as_mut_ptr() as u64,
+            (out.len() - total) as u64,
+            0,
+        );
+        if rd <= 0 {
+            break;
+        }
+        total += rd as usize;
+    }
+    let _ = syscall_dispatch(SYSCALL_NR_CLOSE, fd as u64, 0, 0, 0);
+    Some(total)
+}
+
+fn shell_ls() {
+    uart_puts("bin\n/tmp\n/proc\n/data\n");
+    unsafe {
+        let mut i = 0usize;
+        while i < SHELL_FILE_MAX {
+            if SHELL_FILE_USED[i] != 0 {
+                let len = SHELL_FILE_PATH_LENS[i] as usize;
+                if len != 0 {
+                    uart_put_bytes(&SHELL_FILE_PATHS[i][..len]);
+                    uart_puts("\n");
+                }
+            }
+            i += 1;
+        }
+    }
+}
+
+fn syscall_query_u32(nr: u32) -> u32 {
+    let v = syscall_dispatch(nr, 0, 0, 0, 0);
+    if v < 0 { 0 } else { v as u32 }
+}
+
+fn parse_proc_status_pid(path: &[u8]) -> Option<u32> {
+    if !path.starts_with(b"/proc/") || !path.ends_with(b"/status") {
+        return None;
+    }
+    let pid_part = &path[6..path.len() - 7];
+    if pid_part.is_empty() {
+        return None;
+    }
+    let mut pid = 0u32;
+    let mut i = 0usize;
+    while i < pid_part.len() {
+        let b = pid_part[i];
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        pid = pid.saturating_mul(10).saturating_add((b - b'0') as u32);
+        i += 1;
+    }
+    Some(pid)
+}
+
+fn shell_cat_proc(path: &[u8]) -> bool {
+    if path == b"/proc/kernel/status" {
+        uart_puts("InitState:\t");
+        uart_put_u32(syscall_query_u32(SYSCALL_NR_QUERY_INIT_STATE));
+        uart_puts("\nPmmTotal:\t");
+        uart_put_u32(syscall_query_u32(SYSCALL_NR_QUERY_PMM_TOTAL));
+        uart_puts("\nPmmFree:\t");
+        uart_put_u32(syscall_query_u32(SYSCALL_NR_QUERY_PMM_FREE));
+        uart_puts("\nSchedCount:\t");
+        uart_put_u32(syscall_query_u32(SYSCALL_NR_QUERY_SCHED_COUNT));
+        uart_puts("\nVfsCount:\t");
+        uart_put_u32(syscall_query_u32(SYSCALL_NR_QUERY_VFS_COUNT));
+        uart_puts("\nNetQueue:\t");
+        uart_put_u32(syscall_query_u32(SYSCALL_NR_QUERY_NET_QUEUE_LEN));
+        uart_puts("\nDrivers:\t");
+        uart_put_u32(syscall_query_u32(SYSCALL_NR_QUERY_DRIVERS_COUNT));
+        uart_puts("\nSyscalls:\t");
+        uart_put_u32(syscall_query_u32(SYSCALL_NR_QUERY_SYSCALL_COUNT));
+        uart_puts("\nProcCount:\t");
+        uart_put_u32(syscall_query_u32(SYSCALL_NR_QUERY_PROC_COUNT));
+        uart_puts("\n");
+        return true;
+    }
+    if path == b"/proc/syscalls" {
+        uart_puts("SyscallCount:\t");
+        uart_put_u32(syscall_query_u32(SYSCALL_NR_QUERY_SYSCALL_COUNT));
+        uart_puts("\n");
+        return true;
+    }
+    if path == b"/proc/meminfo" {
+        let pmm_total = syscall_query_u32(SYSCALL_NR_QUERY_PMM_TOTAL);
+        let pmm_free = syscall_query_u32(SYSCALL_NR_QUERY_PMM_FREE);
+        uart_puts("MemTotal:\t");
+        uart_put_u32(pmm_total.saturating_mul(4));
+        uart_puts(" kB\nMemFree:\t");
+        uart_put_u32(pmm_free.saturating_mul(4));
+        uart_puts(" kB\nProcCount:\t");
+        uart_put_u32(syscall_query_u32(SYSCALL_NR_QUERY_PROC_COUNT));
+        uart_puts("\n");
+        return true;
+    }
+    if path == b"/proc/net/dev" {
+        let q = syscall_query_u32(SYSCALL_NR_QUERY_NET_QUEUE_LEN);
+        uart_puts("Inter-|   Receive                 |  Transmit\n");
+        uart_puts(" eth0: ");
+        uart_put_u32(q);
+        uart_puts(" packets              ");
+        uart_put_u32(q);
+        uart_puts(" packets\n");
+        return true;
+    }
+    if path == b"/proc/uptime" {
+        uart_puts("0.00 0.00\n");
+        return true;
+    }
+    if let Some(pid) = parse_proc_status_pid(path) {
+        uart_puts("Pid:\t");
+        uart_put_u32(pid);
+        uart_puts("\nState:\tRunning\n");
+        return true;
+    }
+    false
+}
+
 fn shell_handle_line(line: &[u8]) -> bool {
+    let line = trim_ascii_spaces(line);
     if line.is_empty() {
         return false;
     }
     if line == b"help" {
         uart_puts(
-            "qos-sh commands:\n  help\n  echo <text>\n  ps\n  ping <ip>\n  ip addr\n  ip route\n  wget <url>\n  exit\n",
+            "qos-sh commands:\n  help\n  echo <text>\n  ps\n  ping <ip>\n  ip addr\n  ip route\n  wget <url>\n  ls\n  pwd\n  cat <path>\n  touch <path>\n  edit <path> [text]\n  exit\n",
         );
         return false;
     }
@@ -222,6 +516,84 @@ fn shell_handle_line(line: &[u8]) -> bool {
     }
     if line == b"ps" {
         uart_puts("PID PPID STATE CMD\n1 0 Running /sbin/init\n2 1 Running /bin/sh\n");
+        return false;
+    }
+    if line == b"pwd" {
+        uart_puts("/\n");
+        return false;
+    }
+    if line == b"ls" || line.starts_with(b"ls ") {
+        shell_ls();
+        return false;
+    }
+    if line == b"cat" {
+        uart_puts("cat: missing path\n");
+        return false;
+    }
+    if line.starts_with(b"cat ") {
+        let path = trim_ascii_spaces(&line[4..]);
+        if path.is_empty() {
+            uart_puts("cat: missing path\n");
+        } else if shell_cat_proc(path) {
+            // handled above
+        } else {
+            let mut data = [0u8; SHELL_IO_MAX];
+            if let Some(len) = shell_read_file(path, &mut data) {
+                uart_put_bytes(&data[..len]);
+            } else {
+                uart_puts("cat: not found: ");
+                uart_put_bytes(path);
+                uart_puts("\n");
+            }
+        }
+        return false;
+    }
+    if line == b"touch" {
+        uart_puts("touch: missing path\n");
+        return false;
+    }
+    if line.starts_with(b"touch ") {
+        let path = trim_ascii_spaces(&line[6..]);
+        if path.is_empty() {
+            uart_puts("touch: missing path\n");
+        } else if shell_touch_path(path) {
+            uart_puts("created file ");
+            uart_put_bytes(path);
+            uart_puts("\n");
+        } else {
+            uart_puts("touch: failed ");
+            uart_put_bytes(path);
+            uart_puts("\n");
+        }
+        return false;
+    }
+    if line == b"edit" {
+        uart_puts("edit: missing path\n");
+        return false;
+    }
+    if line.starts_with(b"edit ") {
+        let rest = trim_ascii_spaces(&line[5..]);
+        if rest.is_empty() {
+            uart_puts("edit: missing path\n");
+        } else {
+            let mut cut = 0usize;
+            while cut < rest.len() && rest[cut] != b' ' && rest[cut] != b'\t' {
+                cut += 1;
+            }
+            let path = &rest[..cut];
+            let content = trim_ascii_spaces(&rest[cut..]);
+            if path.is_empty() {
+                uart_puts("edit: missing path\n");
+            } else if shell_write_file(path, content, false) {
+                uart_puts("edited ");
+                uart_put_bytes(path);
+                uart_puts("\n");
+            } else {
+                uart_puts("edit: failed ");
+                uart_put_bytes(path);
+                uart_puts("\n");
+            }
+        }
         return false;
     }
     if line == b"echo" {

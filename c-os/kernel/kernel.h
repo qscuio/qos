@@ -6,11 +6,15 @@
 #include "../boot/boot_info.h"
 #include "drivers/drivers.h"
 #include "fs/vfs.h"
+#include "irq/softirq.h"
+#include "kthread/kthread.h"
 #include "mm/mm.h"
 #include "net/net.h"
+#include "net/napi.h"
 #include "proc/proc.h"
 #include "sched/sched.h"
 #include "syscall/syscall.h"
+#include "timer/timer.h"
 
 enum {
     QOS_INIT_MM = 1u << 0,

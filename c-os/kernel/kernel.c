@@ -1,6 +1,17 @@
 #include "init_state.h"
 #include "kernel.h"
 
+#if defined(__GNUC__)
+#define QOS_WEAK __attribute__((weak))
+#else
+#define QOS_WEAK
+#endif
+
+extern void softirq_init(void) QOS_WEAK;
+extern void timer_init(void) QOS_WEAK;
+extern void napi_init(void) QOS_WEAK;
+extern void kthread_init(void) QOS_WEAK;
+
 int qos_boot_info_validate(const boot_info_t *boot_info) {
     if (boot_info == 0) {
         return -1;
@@ -67,6 +78,18 @@ int qos_kernel_entry(const boot_info_t *boot_info) {
     drivers_init();
     vfs_init();
     net_init();
+    if (softirq_init != 0) {
+        softirq_init();
+    }
+    if (timer_init != 0) {
+        timer_init();
+    }
+    if (napi_init != 0) {
+        napi_init();
+    }
+    if (kthread_init != 0) {
+        kthread_init();
+    }
     sched_init();
     syscall_init();
     proc_init();

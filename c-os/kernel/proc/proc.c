@@ -18,6 +18,14 @@ static uint32_t g_sig_blocked[QOS_PROC_MAX];
 static uint64_t g_sig_altstack_sp[QOS_PROC_MAX];
 static uint64_t g_sig_altstack_size[QOS_PROC_MAX];
 static uint32_t g_sig_altstack_flags[QOS_PROC_MAX];
+static uint64_t g_exec_entry[QOS_PROC_MAX];
+static uint64_t g_exec_phoff[QOS_PROC_MAX];
+static uint16_t g_exec_phentsize[QOS_PROC_MAX];
+static uint16_t g_exec_phnum[QOS_PROC_MAX];
+static uint16_t g_exec_load_count[QOS_PROC_MAX];
+static uint8_t g_exec_has_interp[QOS_PROC_MAX];
+static uint64_t g_exec_interp_off[QOS_PROC_MAX];
+static uint64_t g_exec_interp_len[QOS_PROC_MAX];
 static uint32_t g_count = 0;
 
 static int signum_valid(uint32_t signum) {
@@ -57,6 +65,17 @@ static void init_signal_state(uint32_t idx) {
     g_sig_altstack_flags[idx] = 0;
 }
 
+static void init_exec_image_state(uint32_t idx) {
+    g_exec_entry[idx] = 0;
+    g_exec_phoff[idx] = 0;
+    g_exec_phentsize[idx] = 0;
+    g_exec_phnum[idx] = 0;
+    g_exec_load_count[idx] = 0;
+    g_exec_has_interp[idx] = 0;
+    g_exec_interp_off[idx] = 0;
+    g_exec_interp_len[idx] = 0;
+}
+
 static int find_pid(uint32_t pid) {
     uint32_t i = 0;
     while (i < QOS_PROC_MAX) {
@@ -94,6 +113,14 @@ void qos_proc_reset(void) {
     memset(g_sig_altstack_sp, 0, sizeof(g_sig_altstack_sp));
     memset(g_sig_altstack_size, 0, sizeof(g_sig_altstack_size));
     memset(g_sig_altstack_flags, 0, sizeof(g_sig_altstack_flags));
+    memset(g_exec_entry, 0, sizeof(g_exec_entry));
+    memset(g_exec_phoff, 0, sizeof(g_exec_phoff));
+    memset(g_exec_phentsize, 0, sizeof(g_exec_phentsize));
+    memset(g_exec_phnum, 0, sizeof(g_exec_phnum));
+    memset(g_exec_load_count, 0, sizeof(g_exec_load_count));
+    memset(g_exec_has_interp, 0, sizeof(g_exec_has_interp));
+    memset(g_exec_interp_off, 0, sizeof(g_exec_interp_off));
+    memset(g_exec_interp_len, 0, sizeof(g_exec_interp_len));
     g_count = 0;
 }
 
@@ -122,6 +149,7 @@ int qos_proc_create(uint32_t pid, uint32_t ppid) {
         return -1;
     }
     init_signal_state((uint32_t)slot);
+    init_exec_image_state((uint32_t)slot);
     g_count++;
     return 0;
 }
@@ -161,6 +189,14 @@ int qos_proc_fork(uint32_t parent_pid, uint32_t child_pid) {
     g_sig_altstack_sp[(uint32_t)child_idx] = g_sig_altstack_sp[(uint32_t)parent_idx];
     g_sig_altstack_size[(uint32_t)child_idx] = g_sig_altstack_size[(uint32_t)parent_idx];
     g_sig_altstack_flags[(uint32_t)child_idx] = g_sig_altstack_flags[(uint32_t)parent_idx];
+    g_exec_entry[(uint32_t)child_idx] = g_exec_entry[(uint32_t)parent_idx];
+    g_exec_phoff[(uint32_t)child_idx] = g_exec_phoff[(uint32_t)parent_idx];
+    g_exec_phentsize[(uint32_t)child_idx] = g_exec_phentsize[(uint32_t)parent_idx];
+    g_exec_phnum[(uint32_t)child_idx] = g_exec_phnum[(uint32_t)parent_idx];
+    g_exec_load_count[(uint32_t)child_idx] = g_exec_load_count[(uint32_t)parent_idx];
+    g_exec_has_interp[(uint32_t)child_idx] = g_exec_has_interp[(uint32_t)parent_idx];
+    g_exec_interp_off[(uint32_t)child_idx] = g_exec_interp_off[(uint32_t)parent_idx];
+    g_exec_interp_len[(uint32_t)child_idx] = g_exec_interp_len[(uint32_t)parent_idx];
     g_count++;
     return 0;
 }
@@ -180,6 +216,7 @@ int qos_proc_remove(uint32_t pid) {
     g_cwds[(uint32_t)idx][0] = '\0';
     g_cwd_len[(uint32_t)idx] = 0;
     init_signal_state((uint32_t)idx);
+    init_exec_image_state((uint32_t)idx);
     g_count--;
     return 0;
 }
@@ -294,6 +331,39 @@ int qos_proc_exec_signal_reset(uint32_t pid) {
     }
     g_sig_pending[(uint32_t)idx] = 0;
     g_sig_blocked[(uint32_t)idx] &= ~unmaskable_bits();
+    return 0;
+}
+
+int qos_proc_exec_image_set(uint32_t pid, const qos_proc_exec_image_t *image) {
+    int idx = find_pid(pid);
+    if (idx < 0 || image == 0) {
+        return -1;
+    }
+    g_exec_entry[(uint32_t)idx] = image->entry;
+    g_exec_phoff[(uint32_t)idx] = image->phoff;
+    g_exec_phentsize[(uint32_t)idx] = image->phentsize;
+    g_exec_phnum[(uint32_t)idx] = image->phnum;
+    g_exec_load_count[(uint32_t)idx] = image->load_count;
+    g_exec_has_interp[(uint32_t)idx] = image->has_interp;
+    g_exec_interp_off[(uint32_t)idx] = image->interp_off;
+    g_exec_interp_len[(uint32_t)idx] = image->interp_len;
+    return 0;
+}
+
+int qos_proc_exec_image_get(uint32_t pid, qos_proc_exec_image_t *out_image) {
+    int idx = find_pid(pid);
+    if (idx < 0 || out_image == 0) {
+        return -1;
+    }
+    out_image->entry = g_exec_entry[(uint32_t)idx];
+    out_image->phoff = g_exec_phoff[(uint32_t)idx];
+    out_image->phentsize = g_exec_phentsize[(uint32_t)idx];
+    out_image->phnum = g_exec_phnum[(uint32_t)idx];
+    out_image->load_count = g_exec_load_count[(uint32_t)idx];
+    out_image->has_interp = g_exec_has_interp[(uint32_t)idx];
+    out_image->_pad0 = 0;
+    out_image->interp_off = g_exec_interp_off[(uint32_t)idx];
+    out_image->interp_len = g_exec_interp_len[(uint32_t)idx];
     return 0;
 }
 

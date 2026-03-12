@@ -2,13 +2,14 @@ use qos_libc::{
     qos_atoi, qos_errno_get, qos_errno_set, qos_getpid, qos_htonl, qos_htons, qos_inet_addr,
     qos_inet_ntoa, qos_memcmp, qos_memcpy, qos_memmove, qos_memset, qos_ntohl, qos_ntohs,
     qos_strchr, qos_strcmp, qos_strcpy, qos_strerror, qos_strlen, qos_strncmp, qos_strncpy,
-    qos_strrchr, qos__exit, qos_abort, qos_accept, qos_bind, qos_close, qos_connect, qos_execv,
-    qos_execve, qos_exit, qos_fclose, qos_fflush, qos_fgets, qos_fileno, qos_fopen, qos_fork,
-    qos_fputs, qos_fread, qos_free, qos_fseek, qos_ftell, qos_fwrite, qos_getchar, qos_kill,
-    qos_listen, qos_malloc, qos_perror, qos_printf, qos_putchar, qos_puts, qos_raise, qos_realloc,
-    qos_recv, qos_recvfrom, qos_send, qos_sendto, qos_sigaction, qos_sigaltstack, qos_sigpending,
-    qos_sigprocmask, qos_signal, qos_sigsuspend, qos_snprintf, qos_socket, qos_strtok,
-    qos_vsnprintf, qos_waitpid,
+    qos_strrchr, qos__exit, qos_abort, qos_accept, qos_bind, qos_close, qos_connect, qos_dlclose,
+    qos_dlopen, qos_dlsym, qos_execv, qos_execve, qos_exit, qos_fclose, qos_fflush, qos_fgets,
+    qos_fileno, qos_fopen, qos_fork, qos_fputs, qos_fread, qos_free, qos_fseek, qos_ftell,
+    qos_fwrite, qos_getchar, qos_kill, qos_listen, qos_malloc, qos_modload, qos_modreload,
+    qos_modunload, qos_perror, qos_printf, qos_putchar, qos_puts, qos_raise, qos_realloc, qos_recv,
+    qos_recvfrom, qos_send, qos_sendto, qos_sigaction, qos_sigaltstack, qos_sigpending,
+    qos_sigprocmask, qos_signal, qos_sigsuspend, qos_snprintf, qos_socket, qos_strtok, qos_vsnprintf,
+    qos_waitpid,
 };
 use core::ffi::c_char;
 use std::ffi::{CStr, CString};
@@ -141,6 +142,12 @@ fn host_wrapper_exports_and_smoke_work() {
     let _ = qos_execv as unsafe fn(*const c_char, *const *const c_char) -> i32;
     let _ = qos_execve as unsafe fn(*const c_char, *const *const c_char, *const *const c_char) -> i32;
     let _ = qos_waitpid as unsafe fn(i32, *mut i32, i32) -> i32;
+    let _ = qos_dlopen as unsafe fn(*const c_char, i32) -> *mut core::ffi::c_void;
+    let _ = qos_dlclose as unsafe fn(*mut core::ffi::c_void) -> i32;
+    let _ = qos_dlsym as unsafe fn(*mut core::ffi::c_void, *const c_char) -> *mut core::ffi::c_void;
+    let _ = qos_modload as unsafe fn(*const c_char) -> i32;
+    let _ = qos_modunload as unsafe fn(i32) -> i32;
+    let _ = qos_modreload as unsafe fn(i32) -> i32;
     let _ = qos_abort as unsafe fn() -> !;
     let _ = qos_bind as unsafe fn(i32, *const core::ffi::c_void, u32) -> i32;
     let _ = qos_listen as unsafe fn(i32, i32) -> i32;

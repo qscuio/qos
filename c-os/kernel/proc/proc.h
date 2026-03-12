@@ -32,6 +32,18 @@ typedef struct {
     uint64_t saved_handler;
 } qos_sigframe_t;
 
+typedef struct {
+    uint64_t entry;
+    uint64_t phoff;
+    uint16_t phentsize;
+    uint16_t phnum;
+    uint16_t load_count;
+    uint8_t has_interp;
+    uint8_t _pad0;
+    uint64_t interp_off;
+    uint64_t interp_len;
+} qos_proc_exec_image_t;
+
 void qos_proc_reset(void);
 int qos_proc_create(uint32_t pid, uint32_t ppid);
 int qos_proc_remove(uint32_t pid);
@@ -42,6 +54,8 @@ int qos_proc_fork(uint32_t parent_pid, uint32_t child_pid);
 int qos_proc_exit(uint32_t pid, int32_t code);
 int32_t qos_proc_wait(uint32_t parent_pid, int32_t pid, int32_t *out_status, uint32_t options);
 int qos_proc_exec_signal_reset(uint32_t pid);
+int qos_proc_exec_image_set(uint32_t pid, const qos_proc_exec_image_t *image);
+int qos_proc_exec_image_get(uint32_t pid, qos_proc_exec_image_t *out_image);
 int qos_proc_cwd_set(uint32_t pid, const char *path);
 int32_t qos_proc_cwd_get(uint32_t pid, char *out, uint32_t out_len);
 

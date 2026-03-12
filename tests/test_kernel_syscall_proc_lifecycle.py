@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import struct
 import subprocess
 from pathlib import Path
 
@@ -9,6 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 QOS_BOOT_MAGIC = 0x514F53424F4F5400
 SYSCALL_NR_FORK = 0
 SYSCALL_NR_EXEC = 1
+SYSCALL_NR_OPEN = 5
+SYSCALL_NR_WRITE = 7
+SYSCALL_NR_CLOSE = 8
+SYSCALL_NR_MKDIR = 22
 QOS_SIG_DFL = 0
 QOS_SIG_IGN = 1
 QOS_SIGUSR1 = 10
@@ -49,6 +54,20 @@ class AltStack(ctypes.Structure):
         ("size", ctypes.c_uint64),
         ("flags", ctypes.c_uint32),
         ("_pad", ctypes.c_uint32),
+    ]
+
+
+class ProcExecImage(ctypes.Structure):
+    _fields_ = [
+        ("entry", ctypes.c_uint64),
+        ("phoff", ctypes.c_uint64),
+        ("phentsize", ctypes.c_uint16),
+        ("phnum", ctypes.c_uint16),
+        ("load_count", ctypes.c_uint16),
+        ("has_interp", ctypes.c_uint8),
+        ("_pad0", ctypes.c_uint8),
+        ("interp_off", ctypes.c_uint64),
+        ("interp_len", ctypes.c_uint64),
     ]
 
 
@@ -99,6 +118,36 @@ def _valid_boot_info() -> BootInfo:
 
 def _bit(signum: int) -> int:
     return 1 << signum
+
+
+def _elf64_image() -> bytes:
+    phoff = 64
+    phentsize = 56
+    phnum = 1
+    image = bytearray(256)
+    image[0:16] = bytes([0x7F, ord("E"), ord("L"), ord("F"), 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    struct.pack_into("<HHIQQQIHHHHHH", image, 16, 2, 0x3E, 1, 0x401000, phoff, 0, 0, 64, phentsize, phnum, 0, 0, 0)
+    struct.pack_into("<IIQQQQQQ", image, phoff, 1, 5, 0, 0x400000, 0, 128, 128, 0x1000)
+    return bytes(image)
+
+
+def _write_file_via_syscalls(lib: ctypes.CDLL, path: bytes, data: bytes) -> None:
+    p = ctypes.c_char_p(path)
+    assert lib.qos_syscall_dispatch(SYSCALL_NR_MKDIR, ctypes.cast(p, ctypes.c_void_p).value, 0, 0, 0) == 0
+    fd = lib.qos_syscall_dispatch(SYSCALL_NR_OPEN, ctypes.cast(p, ctypes.c_void_p).value, 0, 0, 0)
+    assert fd >= 0
+    payload = ctypes.create_string_buffer(data)
+    assert (
+        lib.qos_syscall_dispatch(
+            SYSCALL_NR_WRITE,
+            fd,
+            ctypes.cast(payload, ctypes.c_void_p).value,
+            len(data),
+            0,
+        )
+        == len(data)
+    )
+    assert lib.qos_syscall_dispatch(SYSCALL_NR_CLOSE, fd, 0, 0, 0) == 0
 
 
 def test_c_syscall_fork_exec_bridge_and_signal_semantics() -> None:
@@ -208,3 +257,43 @@ def test_c_syscall_fork_exec_reject_invalid_inputs() -> None:
     assert lib.qos_syscall_dispatch(SYSCALL_NR_FORK, 999, 2, 0, 0) == -1
     assert lib.qos_syscall_dispatch(SYSCALL_NR_FORK, 1, 0, 0, 0) == -1
     assert lib.qos_syscall_dispatch(SYSCALL_NR_EXEC, 999, 0, 0, 0) == -1
+
+
+def test_c_syscall_exec_loads_real_elf_image_from_path() -> None:
+    lib = ctypes.CDLL(str(_build_kernel_lib()))
+    lib.qos_kernel_entry.argtypes = [ctypes.POINTER(BootInfo)]
+    lib.qos_kernel_entry.restype = ctypes.c_int
+    lib.qos_proc_create.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    lib.qos_proc_create.restype = ctypes.c_int
+    lib.qos_proc_exec_image_get.argtypes = [ctypes.c_uint32, ctypes.POINTER(ProcExecImage)]
+    lib.qos_proc_exec_image_get.restype = ctypes.c_int
+    lib.qos_syscall_dispatch.argtypes = [
+        ctypes.c_uint32,
+        ctypes.c_uint64,
+        ctypes.c_uint64,
+        ctypes.c_uint64,
+        ctypes.c_uint64,
+    ]
+    lib.qos_syscall_dispatch.restype = ctypes.c_int64
+
+    info = _valid_boot_info()
+    assert lib.qos_kernel_entry(ctypes.byref(info)) == 0
+    assert lib.qos_proc_create(1, 0) == 0
+    assert lib.qos_proc_create(3, 1) == 0
+
+    elf_path = b"/tmp/elfcmd"
+    _write_file_via_syscalls(lib, elf_path, _elf64_image())
+    assert lib.qos_syscall_dispatch(SYSCALL_NR_EXEC, 3, ctypes.cast(ctypes.c_char_p(elf_path), ctypes.c_void_p).value, 0, 0) == 0
+
+    img = ProcExecImage()
+    assert lib.qos_proc_exec_image_get(3, ctypes.byref(img)) == 0
+    assert img.entry == 0x401000
+    assert img.phoff == 64
+    assert img.phentsize == 56
+    assert img.phnum == 1
+    assert img.load_count == 1
+    assert img.has_interp == 0
+
+    bad_path = b"/tmp/notelf"
+    _write_file_via_syscalls(lib, bad_path, b"not-elf")
+    assert lib.qos_syscall_dispatch(SYSCALL_NR_EXEC, 3, ctypes.cast(ctypes.c_char_p(bad_path), ctypes.c_void_p).value, 0, 0) == -1
