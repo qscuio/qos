@@ -947,7 +947,5 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
         uart_puts("\n");
     }
 
-    loop {
-        core::hint::spin_loop();
-    }
+    run_init_process();
 }
