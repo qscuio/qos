@@ -56,10 +56,10 @@ static int g_env_used[QOS_SH_ENV_SLOTS];
 static char g_cwd[QOS_SH_PATH_MAX];
 
 static const char *g_exec_paths[] = {
-    "/bin/ls",   "/bin/cat",  "/bin/echo", "/bin/mkdir", "/bin/rm",   "/bin/ps",   "/bin/ping", "/bin/wget",
-    "/bin/ip",
+    "/bin/ls",     "/bin/cat",   "/bin/echo",  "/bin/mkdir", "/bin/rm",    "/bin/ps",
+    "/bin/ping",   "/bin/wget",  "/bin/ip",    "/bin/touch", "/bin/edit",
     "/usr/bin/ls", "/usr/bin/cat", "/usr/bin/echo", "/usr/bin/mkdir", "/usr/bin/rm", "/usr/bin/ps",
-    "/usr/bin/ping", "/usr/bin/wget", "/usr/bin/ip",
+    "/usr/bin/ping", "/usr/bin/wget", "/usr/bin/ip", "/usr/bin/touch", "/usr/bin/edit",
 };
 static const size_t g_exec_paths_len = sizeof(g_exec_paths) / sizeof(g_exec_paths[0]);
 
@@ -592,6 +592,8 @@ static void print_help(void) {
     puts("  echo <text>");
     puts("  mkdir <path>");
     puts("  rm <path>");
+    puts("  touch <path>");
+    puts("  edit <path> [text]");
     puts("  cd <path>");
     puts("  pwd");
     puts("  export KEY=VAL");
@@ -707,6 +709,7 @@ static void execute_segment(char tokens[][QOS_SH_TOKEN_MAX], int n, const char *
     } else if (streq(cmd, "help")) {
         out_append(out, out_cap, "qos-sh commands:\n");
         out_append(out, out_cap, "  help\n  ls [path]\n  cat <path>\n  echo <text>\n  mkdir <path>\n  rm <path>\n");
+        out_append(out, out_cap, "  touch <path>\n  edit <path> [text]\n");
         out_append(out, out_cap, "  cd <path>\n  pwd\n  export KEY=VAL\n  unset KEY\n  ps\n  ping <ip>\n");
         out_append(out, out_cap, "  ip addr\n  ip route\n  wget <url>\n  exit\n");
     } else if (streq(cmd, "exit")) {
@@ -771,6 +774,49 @@ static void execute_segment(char tokens[][QOS_SH_TOKEN_MAX], int n, const char *
             file_remove(argv[1]);
             snprintf(tmp, sizeof(tmp), "removed %s\n", argv[1]);
             out_append(out, out_cap, tmp);
+        }
+    } else if (streq(cmd, "touch")) {
+        if (argc < 2 || argv[1][0] != '/') {
+            snprintf(tmp, sizeof(tmp), "touch: failed %s\n", argc < 2 ? "(null)" : argv[1]);
+            out_append(out, out_cap, tmp);
+        } else if (file_find(argv[1]) < 0 && file_set(argv[1], "", 0) != 0) {
+            snprintf(tmp, sizeof(tmp), "touch: failed %s\n", argv[1]);
+            out_append(out, out_cap, tmp);
+        } else {
+            snprintf(tmp, sizeof(tmp), "created file %s\n", argv[1]);
+            out_append(out, out_cap, tmp);
+        }
+    } else if (streq(cmd, "edit")) {
+        const char *content = input_data != NULL ? input_data : "";
+        if (argc < 2 || argv[1][0] != '/') {
+            snprintf(tmp, sizeof(tmp), "edit: failed %s\n", argc < 2 ? "(null)" : argv[1]);
+            out_append(out, out_cap, tmp);
+        } else {
+            if (argc > 2) {
+                size_t pos = 0;
+                tmp[0] = '\0';
+                for (i = 2; i < argc && pos + 1 < sizeof(tmp); i++) {
+                    size_t left = sizeof(tmp) - pos;
+                    int wrote;
+                    wrote = snprintf(tmp + pos, left, "%s%s", i == 2 ? "" : " ", argv[i]);
+                    if (wrote < 0) {
+                        break;
+                    }
+                    if ((size_t)wrote >= left) {
+                        pos = sizeof(tmp) - 1;
+                        break;
+                    }
+                    pos += (size_t)wrote;
+                }
+                content = tmp;
+            }
+            if (file_set(argv[1], content, 0) != 0) {
+                snprintf(tmp, sizeof(tmp), "edit: failed %s\n", argv[1]);
+                out_append(out, out_cap, tmp);
+            } else {
+                snprintf(tmp, sizeof(tmp), "edited %s\n", argv[1]);
+                out_append(out, out_cap, tmp);
+            }
         }
     } else if (streq(cmd, "cd")) {
         if (argc < 2) {

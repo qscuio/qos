@@ -1,7 +1,6 @@
 #include <stddef.h>
 #include <string.h>
 #include <limits.h>
-#include <stdio.h>
 
 #include "../init_state.h"
 #include "../kernel.h"
@@ -82,6 +81,10 @@ static uint32_t g_count = 0;
 #define QOS_PROC_FD_NONE 0U
 #define QOS_PROC_FD_MEMINFO 1U
 #define QOS_PROC_FD_STATUS 2U
+#define QOS_PROC_FD_KERNEL_STATUS 3U
+#define QOS_PROC_FD_NET_DEV 4U
+#define QOS_PROC_FD_SYSCALLS 5U
+#define QOS_PROC_FD_UPTIME 6U
 #define QOS_PIPE_MAX 32U
 #define QOS_PIPE_CAP 1024U
 #define QOS_FILE_MAX 128U
@@ -375,6 +378,26 @@ static int proc_path_kind(const char *path, uint8_t *out_kind, uint32_t *out_pid
         *out_pid = 0;
         return 0;
     }
+    if (strcmp(path, "/proc/kernel/status") == 0) {
+        *out_kind = QOS_PROC_FD_KERNEL_STATUS;
+        *out_pid = 0;
+        return 0;
+    }
+    if (strcmp(path, "/proc/net/dev") == 0) {
+        *out_kind = QOS_PROC_FD_NET_DEV;
+        *out_pid = 0;
+        return 0;
+    }
+    if (strcmp(path, "/proc/syscalls") == 0) {
+        *out_kind = QOS_PROC_FD_SYSCALLS;
+        *out_pid = 0;
+        return 0;
+    }
+    if (strcmp(path, "/proc/uptime") == 0) {
+        *out_kind = QOS_PROC_FD_UPTIME;
+        *out_pid = 0;
+        return 0;
+    }
     if (strncmp(path, "/proc/", 6) != 0) {
         return -1;
     }
@@ -400,16 +423,53 @@ static int proc_path_kind(const char *path, uint8_t *out_kind, uint32_t *out_pid
     return 0;
 }
 
+static uint32_t render_append_text(char *out, uint32_t cap, uint32_t off, const char *text) {
+    uint32_t i = 0;
+    if (text == 0) {
+        return off;
+    }
+    while (text[i] != '\0') {
+        if (out != 0 && off + i + 1u < cap) {
+            out[off + i] = text[i];
+        }
+        i++;
+    }
+    return off + i;
+}
+
+static uint32_t render_append_u32(char *out, uint32_t cap, uint32_t off, uint32_t value) {
+    char tmp[16];
+    uint32_t n = 0;
+    uint32_t i;
+    if (value == 0u) {
+        return render_append_text(out, cap, off, "0");
+    }
+    while (value != 0u && n < (uint32_t)sizeof(tmp)) {
+        tmp[n++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    for (i = 0; i < n; i++) {
+        if (out != 0 && off + i + 1u < cap) {
+            out[off + i] = tmp[n - 1u - i];
+        }
+    }
+    return off + n;
+}
+
 static uint32_t proc_fd_render(uint32_t fd, char *out, uint32_t cap) {
-    char tmp[256];
     uint8_t kind;
     uint32_t pid;
-    int n;
-    uint32_t total;
-    uint32_t copy_len;
+    uint32_t total = 0;
+    uint32_t copy_len = 0;
     uint32_t total_pages = qos_pmm_total_pages != 0 ? qos_pmm_total_pages() : 0;
     uint32_t free_pages = qos_pmm_free_pages != 0 ? qos_pmm_free_pages() : 0;
     uint32_t proc_total = qos_proc_count != 0 ? qos_proc_count() : 0;
+    uint32_t init_state = qos_kernel_init_state != 0 ? qos_kernel_init_state() : 0;
+    uint32_t sched_count = qos_sched_count != 0 ? qos_sched_count() : 0;
+    uint32_t vfs_count = qos_vfs_count != 0 ? qos_vfs_count() : 0;
+    uint32_t net_queue = qos_net_queue_len != 0 ? qos_net_queue_len() : 0;
+    uint32_t drivers_count = qos_drivers_count != 0 ? qos_drivers_count() : 0;
+    uint32_t syscall_count = qos_syscall_count();
 
     if (fd >= QOS_FD_MAX || g_fd_kind[fd] != QOS_FD_KIND_PROC) {
         return 0;
@@ -418,19 +478,57 @@ static uint32_t proc_fd_render(uint32_t fd, char *out, uint32_t cap) {
     kind = g_fd_proc_kind[fd];
     pid = g_fd_proc_pid[fd];
     if (kind == QOS_PROC_FD_MEMINFO) {
-        n = snprintf(tmp, sizeof(tmp), "MemTotal:\t%u kB\nMemFree:\t%u kB\nProcCount:\t%u\n", total_pages * 4u,
-                     free_pages * 4u, proc_total);
+        total = render_append_text(out, cap, total, "MemTotal:\t");
+        total = render_append_u32(out, cap, total, total_pages * 4u);
+        total = render_append_text(out, cap, total, " kB\nMemFree:\t");
+        total = render_append_u32(out, cap, total, free_pages * 4u);
+        total = render_append_text(out, cap, total, " kB\nProcCount:\t");
+        total = render_append_u32(out, cap, total, proc_total);
+        total = render_append_text(out, cap, total, "\n");
+    } else if (kind == QOS_PROC_FD_KERNEL_STATUS) {
+        total = render_append_text(out, cap, total, "InitState:\t");
+        total = render_append_u32(out, cap, total, init_state);
+        total = render_append_text(out, cap, total, "\nPmmTotal:\t");
+        total = render_append_u32(out, cap, total, total_pages);
+        total = render_append_text(out, cap, total, "\nPmmFree:\t");
+        total = render_append_u32(out, cap, total, free_pages);
+        total = render_append_text(out, cap, total, "\nSchedCount:\t");
+        total = render_append_u32(out, cap, total, sched_count);
+        total = render_append_text(out, cap, total, "\nVfsCount:\t");
+        total = render_append_u32(out, cap, total, vfs_count);
+        total = render_append_text(out, cap, total, "\nNetQueue:\t");
+        total = render_append_u32(out, cap, total, net_queue);
+        total = render_append_text(out, cap, total, "\nDrivers:\t");
+        total = render_append_u32(out, cap, total, drivers_count);
+        total = render_append_text(out, cap, total, "\nSyscalls:\t");
+        total = render_append_u32(out, cap, total, syscall_count);
+        total = render_append_text(out, cap, total, "\nProcCount:\t");
+        total = render_append_u32(out, cap, total, proc_total);
+        total = render_append_text(out, cap, total, "\n");
+    } else if (kind == QOS_PROC_FD_NET_DEV) {
+        total = render_append_text(out, cap, total, "Inter-|   Receive                 |  Transmit\n");
+        total = render_append_text(out, cap, total, " eth0: ");
+        total = render_append_u32(out, cap, total, net_queue);
+        total = render_append_text(out, cap, total, " packets              ");
+        total = render_append_u32(out, cap, total, net_queue);
+        total = render_append_text(out, cap, total, " packets\n");
+    } else if (kind == QOS_PROC_FD_SYSCALLS) {
+        total = render_append_text(out, cap, total, "SyscallCount:\t");
+        total = render_append_u32(out, cap, total, syscall_count);
+        total = render_append_text(out, cap, total, "\n");
+    } else if (kind == QOS_PROC_FD_UPTIME) {
+        total = render_append_text(out, cap, total, "0.00 0.00\n");
     } else if (kind == QOS_PROC_FD_STATUS) {
         const char *state = (qos_proc_alive != 0 && qos_proc_alive(pid) != 0) ? "Running" : "Zombie";
-        n = snprintf(tmp, sizeof(tmp), "Pid:\t%u\nState:\t%s\n", pid, state);
+        total = render_append_text(out, cap, total, "Pid:\t");
+        total = render_append_u32(out, cap, total, pid);
+        total = render_append_text(out, cap, total, "\nState:\t");
+        total = render_append_text(out, cap, total, state);
+        total = render_append_text(out, cap, total, "\n");
     } else {
         return 0;
     }
 
-    if (n < 0) {
-        return 0;
-    }
-    total = (uint32_t)n;
     if (out == 0 || cap == 0) {
         return total;
     }
@@ -438,7 +536,13 @@ static uint32_t proc_fd_render(uint32_t fd, char *out, uint32_t cap) {
     if (copy_len > cap) {
         copy_len = cap;
     }
-    memcpy(out, tmp, copy_len);
+    if (copy_len > 0 && copy_len <= cap) {
+        if (copy_len == cap) {
+            out[cap - 1u] = '\0';
+        } else {
+            out[copy_len] = '\0';
+        }
+    }
     return total;
 }
 

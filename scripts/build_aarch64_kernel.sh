@@ -56,6 +56,7 @@ if [[ "$impl" == "c" ]]; then
     "$root_dir/c-os/kernel/net/net.c"
     "$root_dir/c-os/kernel/sched/sched.c"
     "$root_dir/c-os/kernel/proc/proc.c"
+    "$root_dir/c-os/kernel/syscall/syscall.c"
   )
 
   objects=("$tmp_dir/start.o" "$tmp_dir/main.o")

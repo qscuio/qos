@@ -10,6 +10,8 @@ const EXEC_PATHS: &[(&str, &str)] = &[
     ("/bin/echo", "echo"),
     ("/bin/mkdir", "mkdir"),
     ("/bin/rm", "rm"),
+    ("/bin/touch", "touch"),
+    ("/bin/edit", "edit"),
     ("/bin/ps", "ps"),
     ("/bin/ping", "ping"),
     ("/bin/ip", "ip"),
@@ -19,6 +21,8 @@ const EXEC_PATHS: &[(&str, &str)] = &[
     ("/usr/bin/echo", "echo"),
     ("/usr/bin/mkdir", "mkdir"),
     ("/usr/bin/rm", "rm"),
+    ("/usr/bin/touch", "touch"),
+    ("/usr/bin/edit", "edit"),
     ("/usr/bin/ps", "ps"),
     ("/usr/bin/ping", "ping"),
     ("/usr/bin/ip", "ip"),
@@ -196,6 +200,8 @@ fn print_help() -> String {
         "  echo <text>",
         "  mkdir <path>",
         "  rm <path>",
+        "  touch <path>",
+        "  edit <path> [text]",
         "  cd <path>",
         "  pwd",
         "  export KEY=VAL",
@@ -311,6 +317,35 @@ fn execute_segment(state: &mut ShellState, tokens: &[String], input: Option<&str
                 }
             } else {
                 out.push_str("rm: failed (null)\n");
+            }
+        }
+        "touch" => {
+            if let Some(path) = args.get(1) {
+                if path.starts_with('/') {
+                    state.files.entry(path.clone()).or_default();
+                    out.push_str(&format!("created file {path}\n"));
+                } else {
+                    out.push_str(&format!("touch: failed {path}\n"));
+                }
+            } else {
+                out.push_str("touch: failed (null)\n");
+            }
+        }
+        "edit" => {
+            if let Some(path) = args.get(1) {
+                if path.starts_with('/') {
+                    let content = if args.len() > 2 {
+                        args[2..].join(" ")
+                    } else {
+                        input_data.clone()
+                    };
+                    state.files.insert(path.clone(), content);
+                    out.push_str(&format!("edited {path}\n"));
+                } else {
+                    out.push_str(&format!("edit: failed {path}\n"));
+                }
+            } else {
+                out.push_str("edit: failed (null)\n");
             }
         }
         "cd" => {

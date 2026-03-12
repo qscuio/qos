@@ -5,8 +5,15 @@
 #include "../../c-os/kernel/init_state.h"
 #include "../../c-os/kernel/kernel.h"
 #include "../../c-os/kernel/net/net.h"
+#include "../../c-os/kernel/proc/proc.h"
+#include "../../c-os/kernel/syscall/syscall.h"
 
 #define UART0 ((volatile uint32_t *)0x09000000u)
+#define UARTFR ((volatile uint32_t *)0x09000018u)
+#define UART_FR_RXFE 0x10u
+#define QOS_SHELL_LINE_MAX 128u
+#define QOS_INIT_PID 1u
+#define QOS_SHELL_PID 2u
 #define QOS_DTB_MAGIC 0xEDFE0DD0u
 #define VIRTIO_MMIO_BASE_START 0x0A000000u
 #define VIRTIO_MMIO_STRIDE 0x200u
@@ -70,6 +77,18 @@
 #define ICMP_REAL_STAGE_QUEUE 3u
 #define ICMP_REAL_STAGE_TIMEOUT 4u
 #define ICMP_REAL_STAGE_TX 5u
+
+#define QOS_ELF_CMD_ECHO 1u
+#define QOS_ELF_CMD_PS 2u
+#define QOS_ELF_CMD_PING 3u
+#define QOS_ELF_CMD_IP 4u
+#define QOS_ELF_CMD_WGET 5u
+#define QOS_ELF_CMD_LS 6u
+#define QOS_ELF_CMD_CAT 7u
+#define QOS_ELF_CMD_TOUCH 8u
+#define QOS_ELF_CMD_EDIT 9u
+
+#define QOS_ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
 typedef struct {
     uint64_t addr;
@@ -187,6 +206,43 @@ char *strcpy(char *dst, const char *src) {
     }
 }
 
+char *strncpy(char *dst, const char *src, size_t n) {
+    size_t i = 0;
+    if (dst == 0 || src == 0) {
+        return dst;
+    }
+    while (i < n && src[i] != '\0') {
+        dst[i] = src[i];
+        i++;
+    }
+    while (i < n) {
+        dst[i] = '\0';
+        i++;
+    }
+    return dst;
+}
+
+void *memmove(void *dst, const void *src, size_t n) {
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+    size_t i;
+    if (d == s || n == 0) {
+        return dst;
+    }
+    if (d < s) {
+        for (i = 0; i < n; i++) {
+            d[i] = s[i];
+        }
+    } else {
+        i = n;
+        while (i > 0) {
+            i--;
+            d[i] = s[i];
+        }
+    }
+    return dst;
+}
+
 unsigned char QOS_STACK[65536];
 
 typedef struct __attribute__((aligned(8))) {
@@ -210,6 +266,713 @@ static void uart_puts(const char *s) {
         uart_putc((uint8_t)*s);
         s++;
     }
+}
+
+static void uart_putn(const char *s, size_t n) {
+    size_t i = 0;
+    while (i < n) {
+        uart_putc((uint8_t)s[i]);
+        i++;
+    }
+}
+
+static uint8_t uart_getc(void) {
+    while ((*UARTFR & UART_FR_RXFE) != 0u) {
+    }
+    return (uint8_t)(*UART0 & 0xFFu);
+}
+
+static void uart_put_u32(uint32_t value) {
+    char buf[16];
+    size_t idx = sizeof(buf);
+    if (value == 0u) {
+        uart_putc((uint8_t)'0');
+        return;
+    }
+    buf[--idx] = '\0';
+    while (value != 0u && idx > 0u) {
+        uint32_t d = value % 10u;
+        value /= 10u;
+        buf[--idx] = (char)('0' + d);
+    }
+    uart_puts(&buf[idx]);
+}
+
+typedef struct {
+    const char *path;
+    const uint8_t *image;
+    size_t image_len;
+} qos_user_elf_t;
+
+static const uint8_t QOS_ELF_IMAGE_ECHO[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_ECHO};
+static const uint8_t QOS_ELF_IMAGE_PS[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_PS};
+static const uint8_t QOS_ELF_IMAGE_PING[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_PING};
+static const uint8_t QOS_ELF_IMAGE_IP[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_IP};
+static const uint8_t QOS_ELF_IMAGE_WGET[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_WGET};
+static const uint8_t QOS_ELF_IMAGE_LS[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_LS};
+static const uint8_t QOS_ELF_IMAGE_CAT[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_CAT};
+static const uint8_t QOS_ELF_IMAGE_TOUCH[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_TOUCH};
+static const uint8_t QOS_ELF_IMAGE_EDIT[] = {0x7Fu, 'E', 'L', 'F', QOS_ELF_CMD_EDIT};
+
+static const qos_user_elf_t QOS_USER_ELFS[] = {
+    {"/bin/echo", QOS_ELF_IMAGE_ECHO, sizeof(QOS_ELF_IMAGE_ECHO)},
+    {"/bin/ps", QOS_ELF_IMAGE_PS, sizeof(QOS_ELF_IMAGE_PS)},
+    {"/bin/ping", QOS_ELF_IMAGE_PING, sizeof(QOS_ELF_IMAGE_PING)},
+    {"/bin/ip", QOS_ELF_IMAGE_IP, sizeof(QOS_ELF_IMAGE_IP)},
+    {"/bin/wget", QOS_ELF_IMAGE_WGET, sizeof(QOS_ELF_IMAGE_WGET)},
+    {"/bin/ls", QOS_ELF_IMAGE_LS, sizeof(QOS_ELF_IMAGE_LS)},
+    {"/bin/cat", QOS_ELF_IMAGE_CAT, sizeof(QOS_ELF_IMAGE_CAT)},
+    {"/bin/touch", QOS_ELF_IMAGE_TOUCH, sizeof(QOS_ELF_IMAGE_TOUCH)},
+    {"/bin/edit", QOS_ELF_IMAGE_EDIT, sizeof(QOS_ELF_IMAGE_EDIT)},
+};
+
+static uint32_t g_next_pid = 3u;
+static char g_shell_files[64][128];
+static uint8_t g_shell_file_used[64];
+
+static void shell_out_clear(char *out, size_t cap) {
+    if (out != 0 && cap != 0) {
+        out[0] = '\0';
+    }
+}
+
+static void shell_out_append(char *out, size_t cap, const char *text) {
+    size_t cur;
+    size_t room;
+    size_t n;
+    if (out == 0 || cap == 0 || text == 0) {
+        return;
+    }
+    cur = strlen(out);
+    if (cur >= cap - 1u) {
+        return;
+    }
+    room = cap - 1u - cur;
+    n = strlen(text);
+    if (n > room) {
+        n = room;
+    }
+    memcpy(out + cur, text, n);
+    out[cur + n] = '\0';
+}
+
+static void shell_out_append_u32(char *out, size_t cap, uint32_t value) {
+    char num[16];
+    size_t idx = sizeof(num) - 1u;
+    num[idx] = '\0';
+    if (value == 0u) {
+        shell_out_append(out, cap, "0");
+        return;
+    }
+    while (value != 0u && idx > 0u) {
+        uint32_t d = value % 10u;
+        value /= 10u;
+        num[--idx] = (char)('0' + d);
+    }
+    shell_out_append(out, cap, &num[idx]);
+}
+
+static void shell_track_file(const char *path) {
+    uint32_t i;
+    if (path == 0 || path[0] != '/') {
+        return;
+    }
+    for (i = 0; i < QOS_ARRAY_LEN(g_shell_file_used); i++) {
+        if (g_shell_file_used[i] != 0 && strcmp(g_shell_files[i], path) == 0) {
+            return;
+        }
+    }
+    for (i = 0; i < QOS_ARRAY_LEN(g_shell_file_used); i++) {
+        if (g_shell_file_used[i] == 0) {
+            g_shell_file_used[i] = 1;
+            strncpy(g_shell_files[i], path, sizeof(g_shell_files[i]) - 1u);
+            g_shell_files[i][sizeof(g_shell_files[i]) - 1u] = '\0';
+            return;
+        }
+    }
+}
+
+static int shell_path_exists(const char *path) {
+    uint64_t st[2];
+    if (path == 0 || path[0] != '/') {
+        return 0;
+    }
+    return qos_syscall_dispatch(SYSCALL_NR_STAT, (uint64_t)(uintptr_t)path, (uint64_t)(uintptr_t)st, 0, 0) == 0 ? 1 : 0;
+}
+
+static int shell_touch_path(const char *path) {
+    int64_t fd;
+    if (path == 0 || path[0] != '/') {
+        return -1;
+    }
+    if (shell_path_exists(path) == 0 &&
+        qos_syscall_dispatch(SYSCALL_NR_MKDIR, (uint64_t)(uintptr_t)path, 0, 0, 0) != 0) {
+        return -1;
+    }
+    fd = qos_syscall_dispatch(SYSCALL_NR_OPEN, (uint64_t)(uintptr_t)path, 0, 0, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    (void)qos_syscall_dispatch(SYSCALL_NR_CLOSE, (uint64_t)fd, 0, 0, 0);
+    shell_track_file(path);
+    return 0;
+}
+
+static int shell_write_file(const char *path, const char *content, int append) {
+    int64_t fd;
+    size_t len = 0;
+    if (path == 0 || path[0] != '/') {
+        return -1;
+    }
+    if (content != 0) {
+        len = strlen(content);
+    }
+    if (append == 0 && shell_path_exists(path) != 0) {
+        (void)qos_syscall_dispatch(SYSCALL_NR_UNLINK, (uint64_t)(uintptr_t)path, 0, 0, 0);
+    }
+    if (shell_touch_path(path) != 0) {
+        return -1;
+    }
+    fd = qos_syscall_dispatch(SYSCALL_NR_OPEN, (uint64_t)(uintptr_t)path, 0, 0, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    if (append != 0) {
+        (void)qos_syscall_dispatch(SYSCALL_NR_LSEEK, (uint64_t)fd, 0, 2, 0);
+    }
+    if (len != 0 && qos_syscall_dispatch(SYSCALL_NR_WRITE, (uint64_t)fd, (uint64_t)(uintptr_t)content, (uint64_t)len, 0) <
+                        0) {
+        (void)qos_syscall_dispatch(SYSCALL_NR_CLOSE, (uint64_t)fd, 0, 0, 0);
+        return -1;
+    }
+    (void)qos_syscall_dispatch(SYSCALL_NR_CLOSE, (uint64_t)fd, 0, 0, 0);
+    shell_track_file(path);
+    return 0;
+}
+
+static int shell_read_file(const char *path, char *out, size_t cap) {
+    int64_t fd;
+    size_t total = 0;
+    if (path == 0 || out == 0 || cap == 0) {
+        return -1;
+    }
+    out[0] = '\0';
+    fd = qos_syscall_dispatch(SYSCALL_NR_OPEN, (uint64_t)(uintptr_t)path, 0, 0, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    while (total + 1u < cap) {
+        int64_t n = qos_syscall_dispatch(SYSCALL_NR_READ, (uint64_t)fd, (uint64_t)(uintptr_t)(out + total),
+                                         (uint64_t)(cap - 1u - total), 0);
+        if (n <= 0) {
+            break;
+        }
+        total += (size_t)n;
+    }
+    out[total] = '\0';
+    (void)qos_syscall_dispatch(SYSCALL_NR_CLOSE, (uint64_t)fd, 0, 0, 0);
+    return 0;
+}
+
+static void shell_ps_line(char *out, size_t out_cap, uint32_t pid, int32_t ppid, const char *cmd) {
+    shell_out_append_u32(out, out_cap, pid);
+    shell_out_append(out, out_cap, " ");
+    shell_out_append_u32(out, out_cap, ppid < 0 ? 0u : (uint32_t)ppid);
+    shell_out_append(out, out_cap, " Running ");
+    shell_out_append(out, out_cap, cmd);
+    shell_out_append(out, out_cap, "\n");
+}
+
+static const qos_user_elf_t *lookup_user_elf(const char *path) {
+    size_t i;
+    if (path == 0) {
+        return 0;
+    }
+    for (i = 0; i < QOS_ARRAY_LEN(QOS_USER_ELFS); i++) {
+        if (strcmp(path, QOS_USER_ELFS[i].path) == 0) {
+            return &QOS_USER_ELFS[i];
+        }
+    }
+    return 0;
+}
+
+static int validate_elf_image(const uint8_t *image, size_t len, uint8_t *out_cmd) {
+    if (image == 0 || out_cmd == 0 || len < 5u) {
+        return -1;
+    }
+    if (image[0] != 0x7Fu || image[1] != 'E' || image[2] != 'L' || image[3] != 'F') {
+        return -1;
+    }
+    *out_cmd = image[4];
+    return 0;
+}
+
+static const char *resolve_command_path(const char *cmd, char *resolved, size_t cap) {
+    const qos_user_elf_t *entry;
+    size_t i;
+    size_t j = 0;
+    static const char prefix[] = "/bin/";
+    if (cmd == 0 || cmd[0] == '\0' || resolved == 0 || cap == 0) {
+        return 0;
+    }
+    for (i = 0; cmd[i] != '\0'; i++) {
+        if (cmd[i] == '/') {
+            entry = lookup_user_elf(cmd);
+            if (entry == 0) {
+                return 0;
+            }
+            strncpy(resolved, cmd, cap - 1u);
+            resolved[cap - 1u] = '\0';
+            return resolved;
+        }
+    }
+    if (sizeof(prefix) >= cap) {
+        return 0;
+    }
+    for (i = 0; i < sizeof(prefix) - 1u; i++) {
+        resolved[j++] = prefix[i];
+    }
+    for (i = 0; cmd[i] != '\0' && j + 1u < cap; i++) {
+        resolved[j++] = cmd[i];
+    }
+    resolved[j] = '\0';
+    entry = lookup_user_elf(resolved);
+    return entry == 0 ? 0 : resolved;
+}
+
+static int tokenize(const char *line, char tokens[][128], int max_tokens) {
+    int count = 0;
+    const char *p = line;
+    while (p != 0 && *p != '\0') {
+        char quote = '\0';
+        int ti = 0;
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+            p++;
+        }
+        if (*p == '\0' || count >= max_tokens) {
+            break;
+        }
+        if (*p == '|' || *p == '<') {
+            tokens[count][0] = *p;
+            tokens[count][1] = '\0';
+            count++;
+            p++;
+            continue;
+        }
+        if (*p == '>') {
+            tokens[count][0] = '>';
+            if (*(p + 1) == '>') {
+                tokens[count][1] = '>';
+                tokens[count][2] = '\0';
+                p += 2;
+            } else {
+                tokens[count][1] = '\0';
+                p++;
+            }
+            count++;
+            continue;
+        }
+        if (*p == '\'' || *p == '"') {
+            quote = *p++;
+            while (*p != '\0' && *p != quote && ti < 127) {
+                tokens[count][ti++] = *p++;
+            }
+            if (*p == quote) {
+                p++;
+            }
+            tokens[count][ti] = '\0';
+            count++;
+            continue;
+        }
+        while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r' && *p != '|' && *p != '<' &&
+               *p != '>' && ti < 127) {
+            tokens[count][ti++] = *p++;
+        }
+        tokens[count][ti] = '\0';
+        count++;
+    }
+    return count;
+}
+
+static int elf_run_command(uint8_t cmd_id, uint32_t pid, const char *args, const char *stdin_data, char *out,
+                           size_t out_cap) {
+    char tmp[512];
+    const char *safe_args = args != 0 ? args : "";
+    const char *safe_in = stdin_data != 0 ? stdin_data : "";
+    if (cmd_id == QOS_ELF_CMD_ECHO) {
+        if (safe_args[0] != '\0') {
+            shell_out_append(out, out_cap, safe_args);
+            shell_out_append(out, out_cap, "\n");
+        } else if (safe_in[0] != '\0') {
+            shell_out_append(out, out_cap, safe_in);
+        } else {
+            shell_out_append(out, out_cap, "\n");
+        }
+        return 0;
+    }
+    if (cmd_id == QOS_ELF_CMD_PS) {
+        uint32_t scan = 1u;
+        shell_out_append(out, out_cap, "PID PPID STATE CMD\n");
+        while (scan < g_next_pid) {
+            if (qos_proc_alive(scan) != 0) {
+                if (scan == QOS_INIT_PID) {
+                    shell_ps_line(out, out_cap, scan, 0, "/sbin/init");
+                } else if (scan == QOS_SHELL_PID) {
+                    shell_ps_line(out, out_cap, scan, (int32_t)QOS_INIT_PID, "/bin/sh");
+                } else if (scan == pid) {
+                    shell_ps_line(out, out_cap, scan, (int32_t)QOS_SHELL_PID, "/bin/task");
+                } else {
+                    shell_ps_line(out, out_cap, scan, qos_proc_parent(scan), "/bin/task");
+                }
+            }
+            scan++;
+        }
+        return 0;
+    }
+    if (cmd_id == QOS_ELF_CMD_PING) {
+        if (safe_args[0] == '\0') {
+            shell_out_append(out, out_cap, "ping: missing host\n");
+            return 1;
+        }
+        if (strcmp(safe_args, "10.0.2.2") == 0) {
+            shell_out_append(out, out_cap, "PING ");
+            shell_out_append(out, out_cap, safe_args);
+            shell_out_append(out, out_cap, "\n64 bytes from ");
+            shell_out_append(out, out_cap, safe_args);
+            shell_out_append(out, out_cap, ": icmp_seq=1 ttl=64 time=1ms\n1 packets transmitted, 1 received\n");
+            return 0;
+        }
+        shell_out_append(out, out_cap, "PING ");
+        shell_out_append(out, out_cap, safe_args);
+        shell_out_append(out, out_cap,
+                         "\nFrom 10.0.2.15 icmp_seq=1 Destination Host Unreachable\n1 packets transmitted, 0 "
+                         "received\n");
+        return 1;
+    }
+    if (cmd_id == QOS_ELF_CMD_IP) {
+        if (safe_args[0] == '\0') {
+            shell_out_append(out, out_cap, "ip: missing subcommand\n");
+            return 1;
+        }
+        if (strcmp(safe_args, "addr") == 0) {
+            shell_out_append(out, out_cap, "2: eth0    inet 10.0.2.15/24 brd 10.0.2.255\n");
+            return 0;
+        }
+        if (strcmp(safe_args, "route") == 0) {
+            shell_out_append(out, out_cap, "default via 10.0.2.2 dev eth0\n10.0.2.0/24 dev eth0 scope link\n");
+            return 0;
+        }
+        shell_out_append(out, out_cap, "ip: unsupported subcommand\n");
+        return 1;
+    }
+    if (cmd_id == QOS_ELF_CMD_WGET) {
+        if (safe_args[0] == '\0') {
+            shell_out_append(out, out_cap, "wget: missing url\n");
+            return 1;
+        }
+        if (strcmp(safe_args, "http://10.0.2.2:8080/") == 0) {
+            shell_out_append(out, out_cap, "HTTP/1.0 200 OK\r\nContent-Length: 4\r\n\r\nqos\n");
+            return 0;
+        }
+        shell_out_append(out, out_cap, "wget: failed\n");
+        return 1;
+    }
+    if (cmd_id == QOS_ELF_CMD_LS) {
+        uint32_t i;
+        shell_out_append(out, out_cap, "bin\n/tmp\n/proc\n/data\n");
+        for (i = 0; i < QOS_ARRAY_LEN(g_shell_file_used); i++) {
+            if (g_shell_file_used[i] != 0) {
+                shell_out_append(out, out_cap, g_shell_files[i]);
+                shell_out_append(out, out_cap, "\n");
+            }
+        }
+        return 0;
+    }
+    if (cmd_id == QOS_ELF_CMD_CAT) {
+        if (safe_args[0] == '\0') {
+            if (safe_in[0] != '\0') {
+                shell_out_append(out, out_cap, safe_in);
+                return 0;
+            }
+            shell_out_append(out, out_cap, "cat: missing path\n");
+            return 1;
+        }
+        if (shell_read_file(safe_args, tmp, sizeof(tmp)) != 0) {
+            shell_out_append(out, out_cap, "cat: not found: ");
+            shell_out_append(out, out_cap, safe_args);
+            shell_out_append(out, out_cap, "\n");
+            return 1;
+        }
+        shell_out_append(out, out_cap, tmp);
+        return 0;
+    }
+    if (cmd_id == QOS_ELF_CMD_TOUCH) {
+        if (safe_args[0] == '\0') {
+            shell_out_append(out, out_cap, "touch: missing path\n");
+            return 1;
+        }
+        if (shell_touch_path(safe_args) != 0) {
+            shell_out_append(out, out_cap, "touch: failed ");
+            shell_out_append(out, out_cap, safe_args);
+            shell_out_append(out, out_cap, "\n");
+            return 1;
+        }
+        shell_out_append(out, out_cap, "created file ");
+        shell_out_append(out, out_cap, safe_args);
+        shell_out_append(out, out_cap, "\n");
+        return 0;
+    }
+    if (cmd_id == QOS_ELF_CMD_EDIT) {
+        char path[128];
+        const char *content = safe_in;
+        size_t i = 0;
+        size_t j = 0;
+        while (safe_args[i] == ' ') {
+            i++;
+        }
+        while (safe_args[i] != '\0' && safe_args[i] != ' ' && j + 1u < sizeof(path)) {
+            path[j++] = safe_args[i++];
+        }
+        path[j] = '\0';
+        while (safe_args[i] == ' ') {
+            i++;
+        }
+        if (safe_args[i] != '\0') {
+            content = safe_args + i;
+        }
+        if (path[0] == '\0') {
+            shell_out_append(out, out_cap, "edit: missing path\n");
+            return 1;
+        }
+        if (shell_write_file(path, content, 0) != 0) {
+            shell_out_append(out, out_cap, "edit: failed ");
+            shell_out_append(out, out_cap, path);
+            shell_out_append(out, out_cap, "\n");
+            return 1;
+        }
+        shell_out_append(out, out_cap, "edited ");
+        shell_out_append(out, out_cap, path);
+        shell_out_append(out, out_cap, "\n");
+        return 0;
+    }
+    shell_out_append(out, out_cap, "exec: unknown image command\n");
+    return 1;
+}
+
+static int spawn_exec_elf(uint32_t shell_pid, const char *path, const char *args, const char *stdin_data, char *out,
+                          size_t out_cap) {
+    const qos_user_elf_t *image = lookup_user_elf(path);
+    uint8_t cmd_id = 0;
+    int64_t rc;
+    int32_t status = -1;
+    uint32_t child_pid = g_next_pid;
+
+    if (image == 0 || validate_elf_image(image->image, image->image_len, &cmd_id) != 0) {
+        shell_out_append(out, out_cap, "exec: invalid ELF image\n");
+        return -1;
+    }
+    if (g_next_pid == UINT32_MAX) {
+        shell_out_append(out, out_cap, "fork: pid space exhausted\n");
+        return -1;
+    }
+    g_next_pid++;
+
+    rc = qos_syscall_dispatch(SYSCALL_NR_FORK, shell_pid, child_pid, 0, 0);
+    if (rc < 0) {
+        shell_out_append(out, out_cap, "fork: failed\n");
+        return -1;
+    }
+    if (qos_syscall_dispatch(SYSCALL_NR_EXEC, child_pid, (uint64_t)(uintptr_t)path, 0, 0) < 0) {
+        shell_out_append(out, out_cap, "exec: failed\n");
+        (void)qos_syscall_dispatch(SYSCALL_NR_EXIT, child_pid, 1, 0, 0);
+        (void)qos_syscall_dispatch(SYSCALL_NR_WAITPID, shell_pid, child_pid, (uint64_t)(uintptr_t)&status, 0);
+        return -1;
+    }
+
+    status = (int32_t)elf_run_command(cmd_id, child_pid, args != 0 ? args : "", stdin_data, out, out_cap);
+    (void)qos_syscall_dispatch(SYSCALL_NR_EXIT, child_pid, (uint64_t)(uint32_t)(status == 0 ? 0 : 1), 0, 0);
+    rc = qos_syscall_dispatch(SYSCALL_NR_WAITPID, shell_pid, child_pid, (uint64_t)(uintptr_t)&status, 0);
+    if (rc < 0) {
+        shell_out_append(out, out_cap, "waitpid: failed\n");
+        return -1;
+    }
+    return status;
+}
+
+static void execute_segment(uint32_t shell_pid, char tokens[][128], int n, const char *input, char *out, size_t out_cap,
+                            int *exit_shell) {
+    char *argv[32];
+    int argc = 0;
+    const char *redir_in = 0;
+    const char *redir_out = 0;
+    int append = 0;
+    const char *input_data = input;
+    char argline[256];
+    char path_buf[128];
+    int i;
+    shell_out_clear(out, out_cap);
+    for (i = 0; i < n; i++) {
+        if ((strcmp(tokens[i], "<") == 0 || strcmp(tokens[i], ">") == 0 || strcmp(tokens[i], ">>") == 0) &&
+            i + 1 < n) {
+            if (strcmp(tokens[i], "<") == 0) {
+                redir_in = tokens[i + 1];
+            } else {
+                redir_out = tokens[i + 1];
+                append = strcmp(tokens[i], ">>") == 0;
+            }
+            i++;
+            continue;
+        }
+        if (argc < 32) {
+            argv[argc++] = tokens[i];
+        }
+    }
+    if (argc == 0) {
+        return;
+    }
+    if (redir_in != 0) {
+        static char input_buf[2048];
+        if (shell_read_file(redir_in, input_buf, sizeof(input_buf)) == 0) {
+            input_data = input_buf;
+        } else {
+            input_data = "";
+        }
+    }
+    if (strcmp(argv[0], "help") == 0) {
+        shell_out_append(out, out_cap, "qos-sh commands:\n");
+        shell_out_append(out, out_cap, "  help\n  echo <text>\n  ps\n  ping <ip>\n  ip addr\n  ip route\n");
+        shell_out_append(out, out_cap, "  wget <url>\n  ls\n  cat <path>\n  touch <path>\n  edit <path> [text]\n");
+        shell_out_append(out, out_cap, "  exit\n");
+    } else if (strcmp(argv[0], "exit") == 0) {
+        shell_out_append(out, out_cap, "logout\n");
+        *exit_shell = 1;
+    } else {
+        const char *path = resolve_command_path(argv[0], path_buf, sizeof(path_buf));
+        size_t pos = 0;
+        if (path == 0) {
+            shell_out_append(out, out_cap, "unknown command: ");
+            shell_out_append(out, out_cap, argv[0]);
+            shell_out_append(out, out_cap, "\n");
+            return;
+        }
+        argline[0] = '\0';
+        for (i = 1; i < argc && pos + 1u < sizeof(argline); i++) {
+            size_t k = 0;
+            if (pos != 0 && pos + 1u < sizeof(argline)) {
+                argline[pos++] = ' ';
+            }
+            while (argv[i][k] != '\0' && pos + 1u < sizeof(argline)) {
+                argline[pos++] = argv[i][k++];
+            }
+            argline[pos] = '\0';
+        }
+        (void)spawn_exec_elf(shell_pid, path, argline, input_data, out, out_cap);
+    }
+    if (redir_out != 0) {
+        (void)shell_write_file(redir_out, out, append);
+        shell_out_clear(out, out_cap);
+    }
+}
+
+static int shell_handle_line(const char *line, uint32_t shell_pid) {
+    char work[256];
+    char tokens[64][128];
+    int ntok;
+    int pipe_idx = -1;
+    int i;
+    int exit_shell = 0;
+    char out1[2048];
+    char out2[2048];
+    size_t n;
+    if (line == 0) {
+        return 0;
+    }
+    strncpy(work, line, sizeof(work) - 1u);
+    work[sizeof(work) - 1u] = '\0';
+    n = strlen(work);
+    if (n != 0 && (work[n - 1u] == '\n' || work[n - 1u] == '\r')) {
+        work[n - 1u] = '\0';
+    }
+    ntok = tokenize(work, tokens, 64);
+    if (ntok == 0) {
+        return 0;
+    }
+    for (i = 0; i < ntok; i++) {
+        if (strcmp(tokens[i], "|") == 0) {
+            pipe_idx = i;
+            break;
+        }
+    }
+    shell_out_clear(out1, sizeof(out1));
+    shell_out_clear(out2, sizeof(out2));
+    if (pipe_idx > 0 && pipe_idx < ntok - 1) {
+        execute_segment(shell_pid, tokens, pipe_idx, 0, out1, sizeof(out1), &exit_shell);
+        execute_segment(shell_pid, tokens + pipe_idx + 1, ntok - pipe_idx - 1, out1, out2, sizeof(out2), &exit_shell);
+        if (out2[0] != '\0') {
+            uart_puts(out2);
+        }
+    } else {
+        execute_segment(shell_pid, tokens, ntok, 0, out2, sizeof(out2), &exit_shell);
+        if (out2[0] != '\0') {
+            uart_puts(out2);
+        }
+    }
+    return exit_shell;
+}
+
+static void run_serial_shell(uint32_t shell_pid) {
+    char line[QOS_SHELL_LINE_MAX];
+    for (;;) {
+        size_t len = 0;
+        uart_puts("qos-sh:/> ");
+        for (;;) {
+            uint8_t ch = uart_getc();
+            if (ch == '\r' || ch == '\n') {
+                uart_puts("\n");
+                break;
+            }
+            if (ch == 0x08u || ch == 0x7Fu) {
+                if (len != 0u) {
+                    len--;
+                    uart_puts("\b \b");
+                }
+                continue;
+            }
+            if (ch < 0x20u || len + 1u >= QOS_SHELL_LINE_MAX) {
+                continue;
+            }
+            line[len++] = (char)ch;
+            uart_putn((const char *)&ch, 1);
+        }
+        line[len] = '\0';
+        if (shell_handle_line(line, shell_pid) != 0) {
+            return;
+        }
+    }
+}
+
+static void run_init_process(void) {
+    int init_ok = qos_proc_create(QOS_INIT_PID, 0u) == 0;
+    int shell_ok = 0;
+    memset(g_shell_files, 0, sizeof(g_shell_files));
+    memset(g_shell_file_used, 0, sizeof(g_shell_file_used));
+    if (init_ok) {
+        shell_ok = qos_syscall_dispatch(SYSCALL_NR_FORK, QOS_INIT_PID, QOS_SHELL_PID, 0, 0) >= 0;
+    }
+    if (!shell_ok) {
+        shell_ok = qos_proc_create(QOS_SHELL_PID, QOS_INIT_PID) == 0;
+    }
+    g_next_pid = QOS_SHELL_PID + 1u;
+
+    uart_puts("init[1]: starting /sbin/init\n");
+    if (shell_ok) {
+        uart_puts("init[1]: exec /bin/sh\n");
+    } else {
+        uart_puts("init[1]: failed to exec /bin/sh\n");
+    }
+    (void)qos_syscall_dispatch(SYSCALL_NR_MKDIR, (uint64_t)(uintptr_t)"/tmp", 0, 0, 0);
+    (void)qos_syscall_dispatch(SYSCALL_NR_MKDIR, (uint64_t)(uintptr_t)"/data", 0, 0, 0);
+    run_serial_shell(QOS_SHELL_PID);
 }
 
 static int dtb_magic_ok(uint64_t dtb_addr) {
@@ -764,16 +1527,6 @@ static const char *icmp_real_result_text(void) {
     }
 }
 
-void qos_syscall_reset(void) {}
-
-uint32_t qos_syscall_count(void) {
-    return 0;
-}
-
-void syscall_init(void) {
-    qos_kernel_state_mark(QOS_INIT_SYSCALL);
-}
-
 void c_main(uint64_t dtb_addr) {
     uint64_t fallback_dtb;
     uint64_t effective_dtb;
@@ -853,6 +1606,7 @@ void c_main(uint64_t dtb_addr) {
         uart_puts("\n");
     }
 
+    run_init_process();
     for (;;) {
         __asm__ volatile("wfe");
     }

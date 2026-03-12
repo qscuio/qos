@@ -39,6 +39,18 @@ def _script() -> str:
     )
 
 
+def _edit_script() -> str:
+    return (
+        "mkdir /tmp/work\n"
+        "touch /tmp/work/note\n"
+        "edit /tmp/work/note hello qos\n"
+        "cat /tmp/work/note\n"
+        "echo 'pipe edit data' | edit /tmp/work/note\n"
+        "cat /tmp/work/note\n"
+        "exit\n"
+    )
+
+
 def _path_script() -> str:
     return (
         "export PATH=/sbin\n"
@@ -81,6 +93,31 @@ def test_rust_shell_supports_quotes_redirection_pipes_and_builtins() -> None:
     assert "unset PATH" in text
     assert "qos-sh:/>" in text
     assert "qos-sh:/tmp/work>" in text
+
+
+def test_c_shell_supports_touch_and_edit_command() -> None:
+    shell = _build_c_shell()
+    run = _run([str(shell)], input_text=_edit_script())
+    assert run.returncode == 0, f"shell failed:\n{run.stderr}\nstdout:\n{run.stdout}"
+    text = run.stdout
+    assert "created file /tmp/work/note" in text
+    assert "edited /tmp/work/note" in text
+    assert "hello qos" in text
+    assert "pipe edit data" in text
+
+
+def test_rust_shell_supports_touch_and_edit_command() -> None:
+    run = _run(
+        ["cargo", "run", "--quiet", "-p", "qos-userspace"],
+        cwd=ROOT / "rust-os",
+        input_text=_edit_script(),
+    )
+    assert run.returncode == 0, f"shell failed:\n{run.stderr}\nstdout:\n{run.stdout}"
+    text = run.stdout
+    assert "created file /tmp/work/note" in text
+    assert "edited /tmp/work/note" in text
+    assert "hello qos" in text
+    assert "pipe edit data" in text
 
 
 def test_c_shell_resolves_commands_via_path() -> None:

@@ -268,6 +268,10 @@ const SOCK_RAW: u8 = 3;
 const PROC_FD_NONE: u8 = 0;
 const PROC_FD_MEMINFO: u8 = 1;
 const PROC_FD_STATUS: u8 = 2;
+const PROC_FD_KERNEL_STATUS: u8 = 3;
+const PROC_FD_NET_DEV: u8 = 4;
+const PROC_FD_SYSCALLS: u8 = 5;
+const PROC_FD_UPTIME: u8 = 6;
 const QOS_SOCK_PORT_MIN: u16 = 1024;
 const QOS_SOCK_PORT_MAX: u16 = 65535;
 const QOS_SOCK_PORT_COUNT: usize = QOS_SOCK_PORT_MAX as usize - QOS_SOCK_PORT_MIN as usize + 1;
@@ -2685,6 +2689,18 @@ fn syscall_proc_path_kind(path: &str) -> Option<(u8, u32)> {
     if path == "/proc/meminfo" {
         return Some((PROC_FD_MEMINFO, 0));
     }
+    if path == "/proc/kernel/status" {
+        return Some((PROC_FD_KERNEL_STATUS, 0));
+    }
+    if path == "/proc/net/dev" {
+        return Some((PROC_FD_NET_DEV, 0));
+    }
+    if path == "/proc/syscalls" {
+        return Some((PROC_FD_SYSCALLS, 0));
+    }
+    if path == "/proc/uptime" {
+        return Some((PROC_FD_UPTIME, 0));
+    }
     if !path.starts_with("/proc/") || !path.ends_with("/status") {
         return None;
     }
@@ -2752,6 +2768,44 @@ fn syscall_proc_render(state: &SyscallState, fd_idx: usize, out: &mut [u8]) -> u
             append_bytes(out, &mut total, b" kB\nProcCount:\t");
             append_u32_ascii(out, &mut total, proc_total);
             append_bytes(out, &mut total, b"\n");
+        }
+        PROC_FD_KERNEL_STATUS => {
+            append_bytes(out, &mut total, b"InitState:\t");
+            append_u32_ascii(out, &mut total, init_state());
+            append_bytes(out, &mut total, b"\nPmmTotal:\t");
+            append_u32_ascii(out, &mut total, pmm_total_pages());
+            append_bytes(out, &mut total, b"\nPmmFree:\t");
+            append_u32_ascii(out, &mut total, pmm_free_pages());
+            append_bytes(out, &mut total, b"\nSchedCount:\t");
+            append_u32_ascii(out, &mut total, sched_count());
+            append_bytes(out, &mut total, b"\nVfsCount:\t");
+            append_u32_ascii(out, &mut total, vfs_count());
+            append_bytes(out, &mut total, b"\nNetQueue:\t");
+            append_u32_ascii(out, &mut total, net_queue_len());
+            append_bytes(out, &mut total, b"\nDrivers:\t");
+            append_u32_ascii(out, &mut total, drivers_count());
+            append_bytes(out, &mut total, b"\nSyscalls:\t");
+            append_u32_ascii(out, &mut total, syscall_count());
+            append_bytes(out, &mut total, b"\nProcCount:\t");
+            append_u32_ascii(out, &mut total, proc_count());
+            append_bytes(out, &mut total, b"\n");
+        }
+        PROC_FD_NET_DEV => {
+            let q = net_queue_len();
+            append_bytes(out, &mut total, b"Inter-|   Receive                 |  Transmit\n");
+            append_bytes(out, &mut total, b" eth0: ");
+            append_u32_ascii(out, &mut total, q);
+            append_bytes(out, &mut total, b" packets              ");
+            append_u32_ascii(out, &mut total, q);
+            append_bytes(out, &mut total, b" packets\n");
+        }
+        PROC_FD_SYSCALLS => {
+            append_bytes(out, &mut total, b"SyscallCount:\t");
+            append_u32_ascii(out, &mut total, syscall_count());
+            append_bytes(out, &mut total, b"\n");
+        }
+        PROC_FD_UPTIME => {
+            append_bytes(out, &mut total, b"0.00 0.00\n");
         }
         PROC_FD_STATUS => {
             let pid = state.fd_proc_pid[fd_idx];

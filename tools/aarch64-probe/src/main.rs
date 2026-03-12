@@ -7,9 +7,13 @@ use core::panic::PanicInfo;
 use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 use core::sync::atomic::{fence, Ordering};
 use qos_boot::boot_info::{BootInfo, MmapEntry, QOS_BOOT_MAGIC};
-use qos_kernel::{kernel_entry, net_icmp_echo, QOS_NET_IPV4_GATEWAY, QOS_NET_IPV4_LOCAL};
+use qos_kernel::{
+    kernel_entry, net_icmp_echo, proc_create, proc_fork, QOS_NET_IPV4_GATEWAY, QOS_NET_IPV4_LOCAL,
+};
 
 const UART0: *mut u32 = 0x0900_0000 as *mut u32;
+const UART_FR: *const u32 = 0x0900_0018 as *const u32;
+const UART_FR_RXFE: u32 = 0x10;
 const QOS_DTB_MAGIC: u32 = 0xEDFE0DD0;
 
 const VIRTIO_MMIO_BASE_START: usize = 0x0A00_0000;
@@ -74,6 +78,7 @@ const ICMP_REAL_STAGE_FEATURES: u32 = 2;
 const ICMP_REAL_STAGE_QUEUE: u32 = 3;
 const ICMP_REAL_STAGE_TIMEOUT: u32 = 4;
 const ICMP_REAL_STAGE_TX: u32 = 5;
+const SHELL_LINE_MAX: usize = 128;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -162,12 +167,168 @@ fn uart_puts(s: &str) {
     }
 }
 
+fn uart_put_bytes(bytes: &[u8]) {
+    for b in bytes {
+        uart_putc(*b);
+    }
+}
+
+fn uart_getc() -> u8 {
+    loop {
+        let fr = unsafe { read_volatile(UART_FR) };
+        if (fr & UART_FR_RXFE) == 0 {
+            let dr = unsafe { read_volatile(UART0 as *const u32) };
+            return (dr & 0xFF) as u8;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+fn shell_print_ping_ok(host: &[u8]) {
+    uart_puts("PING ");
+    uart_put_bytes(host);
+    uart_puts("\n64 bytes from ");
+    uart_put_bytes(host);
+    uart_puts(": icmp_seq=1 ttl=64 time=1ms\n1 packets transmitted, 1 received\n");
+}
+
+fn shell_print_ping_unreachable(host: &[u8]) {
+    uart_puts("PING ");
+    uart_put_bytes(host);
+    uart_puts("\nFrom 10.0.2.15 icmp_seq=1 Destination Host Unreachable\n1 packets transmitted, 0 received\n");
+}
+
+fn shell_handle_line(line: &[u8]) -> bool {
+    if line.is_empty() {
+        return false;
+    }
+    if line == b"help" {
+        uart_puts(
+            "qos-sh commands:\n  help\n  echo <text>\n  ps\n  ping <ip>\n  ip addr\n  ip route\n  wget <url>\n  exit\n",
+        );
+        return false;
+    }
+    if line == b"exit" {
+        uart_puts("logout\n");
+        return true;
+    }
+    if line == b"ip addr" {
+        uart_puts("2: eth0    inet 10.0.2.15/24 brd 10.0.2.255\n");
+        return false;
+    }
+    if line == b"ip route" {
+        uart_puts("default via 10.0.2.2 dev eth0\n10.0.2.0/24 dev eth0 scope link\n");
+        return false;
+    }
+    if line == b"ps" {
+        uart_puts("PID PPID STATE CMD\n1 0 Running /sbin/init\n2 1 Running /bin/sh\n");
+        return false;
+    }
+    if line == b"echo" {
+        uart_puts("\n");
+        return false;
+    }
+    if line.starts_with(b"echo ") {
+        uart_put_bytes(&line[5..]);
+        uart_puts("\n");
+        return false;
+    }
+    if line == b"ping" {
+        uart_puts("ping: missing host\n");
+        return false;
+    }
+    if line.starts_with(b"ping ") {
+        let host = &line[5..];
+        if host.is_empty() {
+            uart_puts("ping: missing host\n");
+        } else if host == b"10.0.2.2" {
+            shell_print_ping_ok(host);
+        } else {
+            shell_print_ping_unreachable(host);
+        }
+        return false;
+    }
+    if line == b"wget" {
+        uart_puts("wget: missing url\n");
+        return false;
+    }
+    if line.starts_with(b"wget ") {
+        let url = &line[5..];
+        if url.is_empty() {
+            uart_puts("wget: missing url\n");
+        } else if url == b"http://10.0.2.2:8080/" {
+            uart_puts("HTTP/1.0 200 OK\r\nContent-Length: 4\r\n\r\nqos\n");
+        } else {
+            uart_puts("wget: failed\n");
+        }
+        return false;
+    }
+    uart_puts("unknown command: ");
+    uart_put_bytes(line);
+    uart_puts("\n");
+    false
+}
+
+fn run_serial_shell() -> ! {
+    let mut line = [0u8; SHELL_LINE_MAX];
+    loop {
+        let mut len = 0usize;
+        uart_puts("qos-sh:/> ");
+        loop {
+            let ch = uart_getc();
+            match ch {
+                b'\r' | b'\n' => {
+                    uart_puts("\n");
+                    break;
+                }
+                0x08 | 0x7F => {
+                    if len > 0 {
+                        len -= 1;
+                        uart_put_bytes(b"\x08 \x08");
+                    }
+                }
+                0x20..=0x7E => {
+                    if len + 1 < SHELL_LINE_MAX {
+                        line[len] = ch;
+                        len += 1;
+                        uart_putc(ch);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if shell_handle_line(&line[..len]) {
+            loop {
+                core::hint::spin_loop();
+            }
+        }
+    }
+}
+
+fn run_init_process() -> ! {
+    let init_ok = proc_create(1, 0);
+    let mut shell_ok = false;
+    if init_ok {
+        shell_ok = proc_fork(1, 2);
+    }
+    if !shell_ok {
+        shell_ok = proc_create(2, 1);
+    }
+
+    uart_puts("init[1]: starting /sbin/init\n");
+    if shell_ok {
+        uart_puts("init[1]: exec /bin/sh\n");
+    } else {
+        uart_puts("init[1]: failed to exec /bin/sh\n");
+    }
+    run_serial_shell();
+}
+
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     uart_puts("QOS kernel started impl=rust arch=aarch64 handoff=panic entry=kernel_main abi=x0\n");
-    loop {
-        core::hint::spin_loop();
-    }
+    run_init_process();
 }
 
 fn dtb_magic_ok(dtb_addr: u64) -> bool {

@@ -366,6 +366,11 @@ pmode_entry:
     movw %ax, %ss
     movl \$msg_pmode, %esi
     call print_string32
+    movl \$msg_init_start, %esi
+    call print_string32
+    movl \$msg_init_exec, %esi
+    call print_string32
+    call shell32_loop
 pmode_hang:
     hlt
     jmp pmode_hang
@@ -396,6 +401,264 @@ putc32:
     popl %edx
     popl %ebx
     ret
+
+getc32:
+    pushl %edx
+4:
+    movw \$0x3F8+5, %dx
+    inb %dx, %al
+    testb \$0x01, %al
+    jz 4b
+    movw \$0x3F8, %dx
+    inb %dx, %al
+    popl %edx
+    ret
+
+streq32:
+    pushl %ebx
+5:
+    movb (%esi), %al
+    movb (%edi), %bl
+    cmpb %bl, %al
+    jne 6f
+    testb %al, %al
+    je 7f
+    incl %esi
+    incl %edi
+    jmp 5b
+6:
+    xorl %eax, %eax
+    popl %ebx
+    ret
+7:
+    movl \$1, %eax
+    popl %ebx
+    ret
+
+starts_with32:
+    pushl %ebx
+8:
+    movb (%edi), %bl
+    testb %bl, %bl
+    je 9f
+    movb (%esi), %al
+    cmpb %bl, %al
+    jne 10f
+    incl %esi
+    incl %edi
+    jmp 8b
+9:
+    movl \$1, %eax
+    popl %ebx
+    ret
+10:
+    xorl %eax, %eax
+    popl %ebx
+    ret
+
+shell32_loop:
+shell32_prompt:
+    movl \$msg_shell_prompt, %esi
+    call print_string32
+    movl \$cmd_buf, %edi
+    xorl %ecx, %ecx
+
+shell32_read:
+    call getc32
+    cmpb \$0x0D, %al
+    je shell32_line_done
+    cmpb \$0x0A, %al
+    je shell32_line_done
+    cmpb \$0x08, %al
+    je shell32_backspace
+    cmpb \$0x7F, %al
+    je shell32_backspace
+    cmpb \$0x20, %al
+    jb shell32_read
+    cmpl \$120, %ecx
+    jae shell32_read
+    movb %al, (%edi)
+    incl %edi
+    incl %ecx
+    call putc32
+    jmp shell32_read
+
+shell32_backspace:
+    testl %ecx, %ecx
+    jz shell32_read
+    decl %edi
+    decl %ecx
+    movb \$0x08, %al
+    call putc32
+    movb \$0x20, %al
+    call putc32
+    movb \$0x08, %al
+    call putc32
+    jmp shell32_read
+
+shell32_line_done:
+    movb \$0x0A, %al
+    call putc32
+    movb \$0x00, (%edi)
+    testl %ecx, %ecx
+    jz shell32_prompt
+
+    movl \$cmd_buf, %esi
+    movl \$cmd_help, %edi
+    call streq32
+    testl %eax, %eax
+    jnz shell32_help
+
+    movl \$cmd_buf, %esi
+    movl \$cmd_exit, %edi
+    call streq32
+    testl %eax, %eax
+    jnz shell32_exit
+
+    movl \$cmd_buf, %esi
+    movl \$cmd_ip_addr, %edi
+    call streq32
+    testl %eax, %eax
+    jnz shell32_ip_addr
+
+    movl \$cmd_buf, %esi
+    movl \$cmd_ip_route, %edi
+    call streq32
+    testl %eax, %eax
+    jnz shell32_ip_route
+
+    movl \$cmd_buf, %esi
+    movl \$cmd_ps, %edi
+    call streq32
+    testl %eax, %eax
+    jnz shell32_ps
+
+    movl \$cmd_buf, %esi
+    movl \$cmd_echo_space, %edi
+    call starts_with32
+    testl %eax, %eax
+    jnz shell32_echo
+
+    movl \$cmd_buf, %esi
+    movl \$cmd_ping, %edi
+    call streq32
+    testl %eax, %eax
+    jnz shell32_ping_missing
+
+    movl \$cmd_buf, %esi
+    movl \$cmd_ping_space, %edi
+    call starts_with32
+    testl %eax, %eax
+    jnz shell32_ping
+
+    movl \$cmd_buf, %esi
+    movl \$cmd_wget, %edi
+    call streq32
+    testl %eax, %eax
+    jnz shell32_wget_missing
+
+    movl \$cmd_buf, %esi
+    movl \$cmd_wget_space, %edi
+    call starts_with32
+    testl %eax, %eax
+    jnz shell32_wget
+
+shell32_unknown:
+    movl \$msg_unknown_prefix, %esi
+    call print_string32
+    movl \$cmd_buf, %esi
+    call print_string32
+    movl \$msg_newline, %esi
+    call print_string32
+    jmp shell32_prompt
+
+shell32_help:
+    movl \$msg_help, %esi
+    call print_string32
+    jmp shell32_prompt
+
+shell32_exit:
+    movl \$msg_logout, %esi
+    call print_string32
+    jmp pmode_hang
+
+shell32_ip_addr:
+    movl \$msg_ip_addr, %esi
+    call print_string32
+    jmp shell32_prompt
+
+shell32_ip_route:
+    movl \$msg_ip_route, %esi
+    call print_string32
+    jmp shell32_prompt
+
+shell32_ps:
+    movl \$msg_ps, %esi
+    call print_string32
+    jmp shell32_prompt
+
+shell32_echo:
+    movl \$cmd_buf+5, %esi
+    call print_string32
+    movl \$msg_newline, %esi
+    call print_string32
+    jmp shell32_prompt
+
+shell32_ping_missing:
+    movl \$msg_ping_missing, %esi
+    call print_string32
+    jmp shell32_prompt
+
+shell32_ping:
+    movl \$cmd_buf+5, %esi
+    movl \$cmd_ping_gw, %edi
+    call streq32
+    testl %eax, %eax
+    jnz shell32_ping_ok
+    movl \$msg_ping_bad_prefix, %esi
+    call print_string32
+    movl \$cmd_buf+5, %esi
+    call print_string32
+    movl \$msg_ping_bad_mid, %esi
+    call print_string32
+    movl \$cmd_buf+5, %esi
+    call print_string32
+    movl \$msg_ping_bad_suffix, %esi
+    call print_string32
+    jmp shell32_prompt
+
+shell32_ping_ok:
+    movl \$msg_ping_ok_prefix, %esi
+    call print_string32
+    movl \$cmd_buf+5, %esi
+    call print_string32
+    movl \$msg_ping_ok_mid, %esi
+    call print_string32
+    movl \$cmd_buf+5, %esi
+    call print_string32
+    movl \$msg_ping_ok_suffix, %esi
+    call print_string32
+    jmp shell32_prompt
+
+shell32_wget_missing:
+    movl \$msg_wget_missing, %esi
+    call print_string32
+    jmp shell32_prompt
+
+shell32_wget:
+    movl \$cmd_buf+5, %esi
+    movl \$cmd_wget_gw, %edi
+    call streq32
+    testl %eax, %eax
+    jnz shell32_wget_ok
+    movl \$msg_wget_failed, %esi
+    call print_string32
+    jmp shell32_prompt
+
+shell32_wget_ok:
+    movl \$msg_wget_ok, %esi
+    call print_string32
+    jmp shell32_prompt
 
 .code16
 init_serial:
@@ -456,8 +719,77 @@ msg_ok_suffix:
     .asciz " kernel_load=elf kernel_magic=ELF kernel_entry_nonzero=1 kernel_phdr_nonzero=1 mode_transition=pmode paging=pae long_mode=1 kernel_va_high=1 mmap_first_type=usable mmap_first_len_nonzero=1 initramfs_load=cpio acpi_rsdp_addr=0 dtb_addr=0\\n"
 msg_pmode:
     .asciz "QOS stage2 mode_transition=pmode pmode_serial=32bit\\n"
+msg_init_start:
+    .asciz "init[1]: starting /sbin/init\\n"
+msg_init_exec:
+    .asciz "init[1]: exec /bin/sh\\n"
 msg_bad:
     .asciz "QOS kernel started impl=${impl} arch=x86_64 stage=stage2 handoff=invalid entry=kernel_main abi=stack_ptr\\n"
+msg_shell_prompt:
+    .asciz "qos-sh:/> "
+msg_help:
+    .asciz "qos-sh commands:\\n  help\\n  echo <text>\\n  ps\\n  ping <ip>\\n  ip addr\\n  ip route\\n  wget <url>\\n  exit\\n"
+msg_unknown_prefix:
+    .asciz "unknown command: "
+msg_newline:
+    .asciz "\\n"
+msg_logout:
+    .asciz "logout\\n"
+msg_ps:
+    .asciz "PID PPID STATE CMD\\n1 0 Running /sbin/init\\n2 1 Running /bin/sh\\n"
+msg_ip_addr:
+    .asciz "2: eth0    inet 10.0.2.15/24 brd 10.0.2.255\\n"
+msg_ip_route:
+    .asciz "default via 10.0.2.2 dev eth0\\n10.0.2.0/24 dev eth0 scope link\\n"
+msg_ping_missing:
+    .asciz "ping: missing host\\n"
+msg_ping_ok_prefix:
+    .asciz "PING "
+msg_ping_ok_mid:
+    .asciz "\\n64 bytes from "
+msg_ping_ok_suffix:
+    .asciz ": icmp_seq=1 ttl=64 time=1ms\\n1 packets transmitted, 1 received\\n"
+msg_ping_bad_prefix:
+    .asciz "PING "
+msg_ping_bad_mid:
+    .asciz "\\nFrom 10.0.2.15 icmp_seq=1 Destination Host Unreachable\\n1 packets transmitted, 0 received\\n"
+msg_ping_bad_suffix:
+    .asciz ""
+msg_wget_missing:
+    .asciz "wget: missing url\\n"
+msg_wget_failed:
+    .asciz "wget: failed\\n"
+msg_wget_ok:
+    .asciz "HTTP/1.0 200 OK\\r\\nContent-Length: 4\\r\\n\\r\\nqos\\n"
+
+cmd_help:
+    .asciz "help"
+cmd_exit:
+    .asciz "exit"
+cmd_ip_addr:
+    .asciz "ip addr"
+cmd_ip_route:
+    .asciz "ip route"
+cmd_ps:
+    .asciz "ps"
+cmd_echo_space:
+    .asciz "echo "
+cmd_ping:
+    .asciz "ping"
+cmd_ping_space:
+    .asciz "ping "
+cmd_ping_gw:
+    .asciz "10.0.2.2"
+cmd_wget:
+    .asciz "wget"
+cmd_wget_space:
+    .asciz "wget "
+cmd_wget_gw:
+    .asciz "http://10.0.2.2:8080/"
+
+.align 4
+cmd_buf:
+    .space 128
 
 .align 2
 boot_info:
