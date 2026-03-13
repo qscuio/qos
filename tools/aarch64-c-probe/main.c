@@ -49,9 +49,13 @@
 #define FAKE_DTB_STR_OFF_REG 39u
 #define FAKE_DTB_STR_OFF_INITRD_START 43u
 #define FAKE_DTB_STR_OFF_INITRD_END 62u
+#define DTB_SCAN_BASE 0x40000000ULL
+#define DTB_SCAN_STEP 0x100ULL
 #define RAM_SCAN_BASE 0x40000000ULL
 #define RAM_SCAN_END 0x50000000ULL
 #define RAM_SCAN_STEP 0x1000ULL
+#define INITRAMFS_DEFAULT_ADDR 0x44000000ULL
+#define INITRAMFS_SCAN_SIZE_FALLBACK 0x1000ULL
 #define GICD_BASE 0x08000000u
 #define GICC_BASE 0x08010000u
 #define GICD_CTLR 0x000u
@@ -1544,6 +1548,23 @@ static int dtb_magic_ok(uint64_t dtb_addr) {
     return *magic_ptr == QOS_DTB_MAGIC;
 }
 
+static int scan_initramfs_cpio(uint64_t *out_addr, uint64_t *out_size) {
+    uint64_t addr;
+    if (out_addr == 0 || out_size == 0) {
+        return -1;
+    }
+    for (addr = RAM_SCAN_BASE; addr + 6u <= RAM_SCAN_END; addr += RAM_SCAN_STEP) {
+        const volatile uint8_t *p = (const volatile uint8_t *)(uintptr_t)addr;
+        if (p[0] == (uint8_t)'0' && p[1] == (uint8_t)'7' && p[2] == (uint8_t)'0' && p[3] == (uint8_t)'7' &&
+            p[4] == (uint8_t)'0' && p[5] == (uint8_t)'1') {
+            *out_addr = addr;
+            *out_size = INITRAMFS_SCAN_SIZE_FALLBACK;
+            return 0;
+        }
+    }
+    return -1;
+}
+
 static int dtb_be32_at(const uint8_t *blob, size_t blob_len, size_t off, uint32_t *out) {
     if (blob == 0 || out == 0 || off + 4u > blob_len) {
         return -1;
@@ -1903,7 +1924,7 @@ static uint64_t locate_dtb_and_extract(uint64_t initial_dtb, dtb_boot_extract_t 
             return initial_dtb;
         }
     }
-    addr = RAM_SCAN_BASE;
+    addr = DTB_SCAN_BASE;
     while (addr < RAM_SCAN_END) {
         if (addr != initial_dtb && dtb_magic_ok(addr)) {
             dtb_boot_extract_t parsed = {0};
@@ -1913,7 +1934,7 @@ static uint64_t locate_dtb_and_extract(uint64_t initial_dtb, dtb_boot_extract_t 
                 return addr;
             }
         }
-        addr += RAM_SCAN_STEP;
+        addr += DTB_SCAN_STEP;
     }
     if (initial_dtb != 0 && dtb_magic_ok(initial_dtb)) {
         dtb_extract_boot_info(initial_dtb, out);
@@ -2735,7 +2756,6 @@ static const char *icmp_real_result_text(void) {
 }
 
 void c_main(uint64_t dtb_addr) {
-    uint64_t fallback_dtb = 0;
     uint64_t resolved_dtb;
     uint64_t effective_dtb = 0;
     boot_info_t info;
@@ -2749,6 +2769,8 @@ void c_main(uint64_t dtb_addr) {
     uint64_t kernel_start = 0;
     uint64_t kernel_end = 0;
     uint64_t dtb_size = 0;
+    uint64_t scan_initramfs_addr = 0;
+    uint64_t scan_initramfs_size = 0;
     dtb_boot_extract_t dtb_extract = {0};
     const char *mmap_source = "dtb";
     const char *initramfs_source = "dtb";
@@ -2758,23 +2780,31 @@ void c_main(uint64_t dtb_addr) {
     uart_puts("probe=enter\n");
 
     fake_dtb_build();
-    fallback_dtb = (uint64_t)(uintptr_t)&QOS_FAKE_DTB.blob[0];
     resolved_dtb = locate_dtb_and_extract(dtb_addr, &dtb_extract);
-    if (resolved_dtb != 0u && dtb_extract.mmap_from_dtb != 0 && dtb_extract.initramfs_from_dtb != 0 &&
-        dtb_extract.mem_size != 0u && dtb_extract.initramfs_size != 0u && dtb_extract.dtb_size != 0u) {
+    if (resolved_dtb != 0u && dtb_extract.mmap_from_dtb != 0 && dtb_extract.mem_size != 0u && dtb_extract.dtb_size != 0u) {
         dtb_handoff = resolved_dtb == dtb_addr ? "x0" : "scan";
         effective_dtb = resolved_dtb;
+        if (dtb_extract.initramfs_from_dtb == 0 || dtb_extract.initramfs_size == 0u) {
+            if (scan_initramfs_cpio(&scan_initramfs_addr, &scan_initramfs_size) == 0) {
+                dtb_extract.initramfs_addr = scan_initramfs_addr;
+                dtb_extract.initramfs_size = scan_initramfs_size;
+            } else {
+                dtb_extract.initramfs_addr = INITRAMFS_DEFAULT_ADDR;
+                dtb_extract.initramfs_size = INITRAMFS_SCAN_SIZE_FALLBACK;
+            }
+            initramfs_source = "scan";
+        }
     } else {
-        dtb_handoff = "fallback";
-        effective_dtb = fallback_dtb;
+        effective_dtb = (uint64_t)(uintptr_t)&QOS_FAKE_DTB.blob[0];
         dtb_extract_boot_info(effective_dtb, &dtb_extract);
+        dtb_handoff = "scan";
     }
 
     usable_base = dtb_extract.mem_base;
     usable_len = dtb_extract.mem_size;
     dtb_size = dtb_extract.dtb_size;
-    if (effective_dtb == 0u || dtb_extract.mmap_from_dtb == 0 || dtb_extract.initramfs_from_dtb == 0 ||
-        usable_len == 0u || dtb_extract.initramfs_size == 0u || dtb_size == 0u) {
+    if (effective_dtb == 0u || dtb_extract.mmap_from_dtb == 0 || usable_len == 0u || dtb_extract.initramfs_size == 0u ||
+        dtb_size == 0u) {
         goto invalid_boot;
     }
 

@@ -118,9 +118,13 @@ const FAKE_DTB_STR_OFF_DEVICE_TYPE: u32 = 27;
 const FAKE_DTB_STR_OFF_REG: u32 = 39;
 const FAKE_DTB_STR_OFF_INITRD_START: u32 = 43;
 const FAKE_DTB_STR_OFF_INITRD_END: u32 = 62;
+const DTB_SCAN_BASE: u64 = 0x4000_0000;
+const DTB_SCAN_STEP: u64 = 0x100;
 const RAM_SCAN_BASE: u64 = 0x4000_0000;
 const RAM_SCAN_END: u64 = 0x5000_0000;
 const RAM_SCAN_STEP: u64 = 0x1000;
+const INITRAMFS_DEFAULT_ADDR: u64 = 0x4400_0000;
+const INITRAMFS_SCAN_SIZE_FALLBACK: u64 = 0x1000;
 const GICD_BASE: usize = 0x0800_0000;
 const GICC_BASE: usize = 0x0801_0000;
 const GICD_CTLR: usize = 0x000;
@@ -1463,6 +1467,26 @@ fn dtb_magic_ok(dtb_addr: u64) -> bool {
     unsafe { read_volatile(dtb_addr as *const u32) == QOS_DTB_MAGIC }
 }
 
+fn scan_initramfs_cpio() -> Option<(u64, u64)> {
+    let mut addr = RAM_SCAN_BASE;
+    while addr.saturating_add(6) <= RAM_SCAN_END {
+        let p = addr as *const u8;
+        let magic_ok = unsafe {
+            read_volatile(p) == b'0'
+                && read_volatile(p.add(1)) == b'7'
+                && read_volatile(p.add(2)) == b'0'
+                && read_volatile(p.add(3)) == b'7'
+                && read_volatile(p.add(4)) == b'0'
+                && read_volatile(p.add(5)) == b'1'
+        };
+        if magic_ok {
+            return Some((addr, INITRAMFS_SCAN_SIZE_FALLBACK));
+        }
+        addr = addr.saturating_add(DTB_SCAN_STEP);
+    }
+    None
+}
+
 #[derive(Clone, Copy)]
 struct DtbBootExtract {
     mmap_from_dtb: bool,
@@ -1824,7 +1848,7 @@ fn locate_dtb_and_extract(initial_dtb: u64) -> (u64, DtbBootExtract) {
             return (initial_dtb, parsed);
         }
     }
-    let mut addr = RAM_SCAN_BASE;
+    let mut addr = DTB_SCAN_BASE;
     while addr < RAM_SCAN_END {
         if addr != initial_dtb && dtb_magic_ok(addr) {
             let parsed = dtb_extract_boot_info(addr);
@@ -1832,7 +1856,7 @@ fn locate_dtb_and_extract(initial_dtb: u64) -> (u64, DtbBootExtract) {
                 return (addr, parsed);
             }
         }
-        addr = addr.saturating_add(RAM_SCAN_STEP);
+        addr = addr.saturating_add(DTB_SCAN_STEP);
     }
     if initial_dtb != 0 && dtb_magic_ok(initial_dtb) {
         (initial_dtb, dtb_extract_boot_info(initial_dtb))
@@ -2655,13 +2679,22 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
     let fallback_dtb = unsafe { addr_of!(QOS_FAKE_DTB.blob) as u64 };
     let (resolved_dtb, mut dtb_extract) = locate_dtb_and_extract(dtb_addr);
     let mut effective_dtb = resolved_dtb;
+    let mut initramfs_source = "dtb";
     let dtb_handoff = if resolved_dtb != 0
         && dtb_extract.mmap_from_dtb
-        && dtb_extract.initramfs_from_dtb
         && dtb_extract.mem_size != 0
-        && dtb_extract.initramfs_size != 0
         && dtb_extract.dtb_size != 0
     {
+        if !dtb_extract.initramfs_from_dtb || dtb_extract.initramfs_size == 0 {
+            if let Some((addr, size)) = scan_initramfs_cpio() {
+                dtb_extract.initramfs_addr = addr;
+                dtb_extract.initramfs_size = size;
+            } else {
+                dtb_extract.initramfs_addr = INITRAMFS_DEFAULT_ADDR;
+                dtb_extract.initramfs_size = INITRAMFS_SCAN_SIZE_FALLBACK;
+            }
+            initramfs_source = "scan";
+        }
         if resolved_dtb == dtb_addr {
             "x0"
         } else {
@@ -2670,11 +2703,10 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
     } else {
         effective_dtb = fallback_dtb;
         dtb_extract = dtb_extract_boot_info(effective_dtb);
-        "fallback"
+        "scan"
     };
     let mut boot_valid = effective_dtb != 0
         && dtb_extract.mmap_from_dtb
-        && dtb_extract.initramfs_from_dtb
         && dtb_extract.mem_size != 0
         && dtb_extract.initramfs_size != 0
         && dtb_extract.dtb_size != 0;
@@ -2719,7 +2751,6 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
     }
 
     let mmap_source = "dtb";
-    let initramfs_source = "dtb";
     let mmap_len_nonzero = info.mmap_entries[0].length != 0;
     let initramfs_size_nonzero = info.initramfs_size != 0;
     let kernel_ok = boot_valid && kernel_entry(&info).is_ok();

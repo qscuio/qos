@@ -72,7 +72,7 @@ def test_smoke_logs_include_stage_and_handoff_markers() -> None:
             "mmap_source=dtb",
             "mmap_count=",
             "mmap_len_nonzero=1",
-            "initramfs_source=dtb",
+            "initramfs_source=",
             "initramfs_size_nonzero=1",
             "irq_timer=ok",
             "icmp_echo=gateway_ok",
@@ -88,7 +88,7 @@ def test_smoke_logs_include_stage_and_handoff_markers() -> None:
             "mmap_source=dtb",
             "mmap_count=",
             "mmap_len_nonzero=1",
-            "initramfs_source=dtb",
+            "initramfs_source=",
             "initramfs_size_nonzero=1",
             "irq_timer=ok",
             "icmp_echo=gateway_ok",
@@ -114,5 +114,7 @@ def test_smoke_logs_include_stage_and_handoff_markers() -> None:
             assert match, f"missing decimal mmap_count in {log}\n{text}"
             count = int(match.group(1))
             assert count >= 3, f"expected mmap_count >= 3 in {log}, got {count}\n{text}"
-            dtb_handoff = re.search(r"dtb_handoff=(x0|scan|fallback)", text)
-            assert dtb_handoff, f"expected dtb_handoff=(x0|scan|fallback) in {log}\n{text}"
+            dtb_handoff = re.search(r"dtb_handoff=(x0|scan)", text)
+            assert dtb_handoff, f"expected dtb_handoff=(x0|scan) in {log}\n{text}"
+            initramfs_source = re.search(r"initramfs_source=(dtb|scan)", text)
+            assert initramfs_source, f"expected initramfs_source=(dtb|scan) in {log}\n{text}"

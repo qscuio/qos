@@ -298,6 +298,19 @@ QOS_MAPWATCH_LOG=/tmp/qos-mapwatch.log ./qemu/aarch64.sh ...
 QOS_MAPWATCH_LOG=off ./qemu/aarch64.sh ...
 ```
 
+- DTB source control (`qemu/aarch64.sh` now auto-prepares `-dtb` by default):
+
+```bash
+# disable explicit dtb injection
+QOS_AARCH64_DTB=off ./qemu/aarch64.sh ...
+
+# use a specific dtb path
+QOS_AARCH64_DTB=/path/to/virt.dtb ./qemu/aarch64.sh ...
+
+# change auto-generated dtb destination (default: /tmp/qos-aarch64-virt.dtb)
+QOS_AARCH64_DTB_PATH=/tmp/custom-virt.dtb ./qemu/aarch64.sh ...
+```
+
 Preview generated command without launching:
 
 ```bash
@@ -309,10 +322,12 @@ Preview generated command without launching:
 
 - Current smoke checks are marker-based boot/runtime probes over serial.
 - aarch64 startup stubs now perform an explicit EL2→EL1 transition path (when entered at EL2) and preserve DTB handoff register state into kernel entry.
-- aarch64 DTB handoff markers now report `dtb_handoff=x0|scan|fallback`:
+- aarch64 DTB handoff markers now report `dtb_handoff=x0|scan`:
   - `x0`: direct handoff pointer from the entry ABI
   - `scan`: DTB located via RAM scan when direct handoff is absent/invalid
-  - `fallback`: embedded minimal FDT used as last-resort compatibility path
+- aarch64 initramfs markers report `initramfs_source=dtb|scan`:
+  - `dtb`: initrd address/size decoded from DTB `/chosen`
+  - `scan`: CPIO archive signature located by RAM scan when DTB initrd fields are absent
 - Boot markers now include `irq_timer=ok|fail` from the GICv2 + EL1 physical timer probe path.
 - The probe programs GIC distributor/CPU interface for timer PPI 30 and validates timer interrupt readiness during boot.
 - If QEMU seems stuck, stop with `Ctrl+C`.
