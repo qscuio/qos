@@ -1,21 +1,22 @@
 #![no_std]
 #![no_main]
 
-use core::arch::global_asm;
+use core::arch::{asm, global_asm};
 use core::cmp::min;
 use core::panic::PanicInfo;
 use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 use core::sync::atomic::{fence, Ordering};
 use qos_boot::boot_info::{BootInfo, MmapEntry, QOS_BOOT_MAGIC};
 use qos_kernel::{
-    kernel_entry, net_icmp_echo, proc_create, proc_fork, softirq_run, syscall_dispatch,
-    workqueue_completed_count, workqueue_enqueue, workqueue_pending_count, workqueue_reset,
-    QOS_NET_IPV4_GATEWAY, QOS_NET_IPV4_LOCAL, SYSCALL_NR_CLOSE, SYSCALL_NR_LSEEK,
-    SYSCALL_NR_MKDIR, SYSCALL_NR_MODLOAD, SYSCALL_NR_MODUNLOAD, SYSCALL_NR_OPEN,
-    SYSCALL_NR_QUERY_DRIVERS_COUNT, SYSCALL_NR_QUERY_INIT_STATE, SYSCALL_NR_QUERY_NET_QUEUE_LEN,
-    SYSCALL_NR_QUERY_PMM_FREE, SYSCALL_NR_QUERY_PMM_TOTAL, SYSCALL_NR_QUERY_PROC_COUNT,
-    SYSCALL_NR_QUERY_SCHED_COUNT, SYSCALL_NR_QUERY_SYSCALL_COUNT, SYSCALL_NR_QUERY_VFS_COUNT,
-    SYSCALL_NR_READ, SYSCALL_NR_STAT, SYSCALL_NR_UNLINK, SYSCALL_NR_WRITE,
+    kernel_entry, net_icmp_echo, proc_create, proc_fork, sched_add_task, sched_next, softirq_run,
+    syscall_dispatch, vmm_map_as, vmm_set_asid, workqueue_completed_count, workqueue_enqueue,
+    workqueue_pending_count, workqueue_reset, QOS_NET_IPV4_GATEWAY, QOS_NET_IPV4_LOCAL,
+    SYSCALL_NR_CLOSE, SYSCALL_NR_LSEEK, SYSCALL_NR_MKDIR, SYSCALL_NR_MODLOAD, SYSCALL_NR_MODUNLOAD,
+    SYSCALL_NR_OPEN, SYSCALL_NR_QUERY_DRIVERS_COUNT, SYSCALL_NR_QUERY_INIT_STATE,
+    SYSCALL_NR_QUERY_NET_QUEUE_LEN, SYSCALL_NR_QUERY_PMM_FREE, SYSCALL_NR_QUERY_PMM_TOTAL,
+    SYSCALL_NR_QUERY_PROC_COUNT, SYSCALL_NR_QUERY_SCHED_COUNT, SYSCALL_NR_QUERY_SYSCALL_COUNT,
+    SYSCALL_NR_QUERY_VFS_COUNT, SYSCALL_NR_READ, SYSCALL_NR_STAT, SYSCALL_NR_UNLINK, SYSCALL_NR_WRITE,
+    VM_EXEC, VM_READ, VM_USER, VM_WRITE,
 };
 
 const UART0: *mut u32 = 0x0900_0000 as *mut u32;
@@ -89,6 +90,9 @@ const SHELL_LINE_MAX: usize = 128;
 const SHELL_FILE_MAX: usize = 64;
 const SHELL_PATH_MAX: usize = 128;
 const SHELL_IO_MAX: usize = 2048;
+const MAPWATCH_POLL_SPINS: u32 = 200_000;
+const MAPWATCH_SIDE_POLL_SPINS: u32 = 400_000;
+const SEMIHOSTING_SYS_WRITE0: usize = 0x04;
 
 #[no_mangle]
 static mut SHELL_FILE_PATHS: [[u8; SHELL_PATH_MAX]; SHELL_FILE_MAX] = [[0; SHELL_PATH_MAX]; SHELL_FILE_MAX];
@@ -207,15 +211,13 @@ fn uart_put_bytes(bytes: &[u8]) {
     }
 }
 
-fn uart_getc() -> u8 {
-    loop {
-        let fr = unsafe { read_volatile(UART_FR) };
-        if (fr & UART_FR_RXFE) == 0 {
-            let dr = unsafe { read_volatile(UART0 as *const u32) };
-            return (dr & 0xFF) as u8;
-        }
-        core::hint::spin_loop();
+fn uart_try_getc() -> Option<u8> {
+    let fr = unsafe { read_volatile(UART_FR) };
+    if (fr & UART_FR_RXFE) != 0 {
+        return None;
     }
+    let dr = unsafe { read_volatile(UART0 as *const u32) };
+    Some((dr & 0xFF) as u8)
 }
 
 fn uart_put_u32(mut value: u32) {
@@ -234,6 +236,64 @@ fn uart_put_u32(mut value: u32) {
         n -= 1;
         uart_putc(buf[n]);
     }
+}
+
+fn semihost_write0(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let mut out = [0u8; 4096];
+    let mut n = min(bytes.len(), out.len().saturating_sub(1));
+    if n == 0 {
+        return;
+    }
+    out[..n].copy_from_slice(&bytes[..n]);
+    if out[n - 1] != 0 {
+        out[n] = 0;
+    } else {
+        n -= 1;
+        out[n] = 0;
+    }
+    unsafe {
+        asm!(
+            "hlt 0xF000",
+            in("x0") SEMIHOSTING_SYS_WRITE0,
+            in("x1") out.as_ptr() as usize,
+            lateout("x0") _,
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+fn mapwatch_side_emit_snapshot() {
+    let mut map = [0u8; SHELL_IO_MAX];
+    let mut out = [0u8; SHELL_IO_MAX + 128];
+    let mut pos = 0usize;
+    let hdr = b"[mapwatch-side] /proc/runtime/map\n";
+    let fallback = b"CurrentPid:\t0\nCurrentProc:\tnone\nCurrentTid:\t0\nCurrentThread:\tnone\nCurrentAsid:\t0\nMappings:\t0\n";
+
+    let hlen = min(hdr.len(), out.len().saturating_sub(pos));
+    out[pos..pos + hlen].copy_from_slice(&hdr[..hlen]);
+    pos += hlen;
+
+    if let Some(len) = shell_read_file(b"/proc/runtime/map", &mut map) {
+        let mlen = min(len, out.len().saturating_sub(pos));
+        out[pos..pos + mlen].copy_from_slice(&map[..mlen]);
+        pos += mlen;
+    } else {
+        let flen = min(fallback.len(), out.len().saturating_sub(pos));
+        out[pos..pos + flen].copy_from_slice(&fallback[..flen]);
+        pos += flen;
+    }
+    if pos < out.len() && (pos == 0 || out[pos - 1] != b'\n') {
+        out[pos] = b'\n';
+        pos += 1;
+    }
+    if pos < out.len() {
+        out[pos] = b'\n';
+        pos += 1;
+    }
+    semihost_write0(&out[..pos]);
 }
 
 fn shell_print_ping_ok(host: &[u8]) {
@@ -523,20 +583,117 @@ fn shell_read_file(path: &[u8], out: &mut [u8; SHELL_IO_MAX]) -> Option<usize> {
     Some(total)
 }
 
-fn shell_ls() {
-    uart_puts("bin\n/tmp\n/proc\n/data\n");
+fn shell_proc_status_exists(pid: u32) -> bool {
+    let mut path = [0u8; SHELL_PATH_MAX];
+    let prefix = b"/proc/";
+    let suffix = b"/status";
+    let mut off = 0usize;
+    let mut digits = [0u8; 10];
+    let mut nd = 0usize;
+    let mut v = pid;
+    if pid == 0 {
+        return false;
+    }
+    while off < prefix.len() && off + 1 < path.len() {
+        path[off] = prefix[off];
+        off += 1;
+    }
+    while v != 0 && nd < digits.len() {
+        digits[nd] = b'0' + (v % 10) as u8;
+        v /= 10;
+        nd += 1;
+    }
+    while nd > 0 && off + 1 < path.len() {
+        nd -= 1;
+        path[off] = digits[nd];
+        off += 1;
+    }
+    let mut i = 0usize;
+    while i < suffix.len() && off + 1 < path.len() {
+        path[off] = suffix[i];
+        off += 1;
+        i += 1;
+    }
+    path[off] = 0;
+    let fd = syscall_dispatch(SYSCALL_NR_OPEN, path.as_ptr() as u64, 0, 0, 0);
+    if fd < 0 {
+        return false;
+    }
+    let _ = syscall_dispatch(SYSCALL_NR_CLOSE, fd as u64, 0, 0, 0);
+    true
+}
+
+fn shell_ls_proc() {
+    uart_puts("meminfo\nkernel/status\nnet/dev\nsyscalls\nuptime\nruntime/map\n");
+    let mut pid = 1u32;
+    while pid <= 255 {
+        if shell_proc_status_exists(pid) {
+            uart_put_u32(pid);
+            uart_puts("/status\n");
+        }
+        pid += 1;
+    }
+}
+
+fn shell_ls_path(path: &[u8]) {
+    if path.is_empty() || path == b"/" {
+        uart_puts("bin\n/tmp\n/proc\n/data\n");
+        unsafe {
+            let mut i = 0usize;
+            while i < SHELL_FILE_MAX {
+                if SHELL_FILE_USED[i] != 0 {
+                    let len = SHELL_FILE_PATH_LENS[i] as usize;
+                    if len != 0 {
+                        uart_put_bytes(&SHELL_FILE_PATHS[i][..len]);
+                        uart_puts("\n");
+                    }
+                }
+                i += 1;
+            }
+        }
+        return;
+    }
+    if path == b"/proc" || path == b"/proc/" {
+        shell_ls_proc();
+        return;
+    }
+
+    let mut had = false;
     unsafe {
         let mut i = 0usize;
         while i < SHELL_FILE_MAX {
             if SHELL_FILE_USED[i] != 0 {
                 let len = SHELL_FILE_PATH_LENS[i] as usize;
                 if len != 0 {
-                    uart_put_bytes(&SHELL_FILE_PATHS[i][..len]);
-                    uart_puts("\n");
+                    let full = &SHELL_FILE_PATHS[i][..len];
+                    if full.starts_with(path) {
+                        let mut start = path.len();
+                        if !path.ends_with(b"/") {
+                            if start >= full.len() || full[start] != b'/' {
+                                i += 1;
+                                continue;
+                            }
+                            start += 1;
+                        }
+                        if start < full.len() {
+                            let mut end = start;
+                            while end < full.len() && full[end] != b'/' {
+                                end += 1;
+                            }
+                            if end > start {
+                                uart_put_bytes(&full[start..end]);
+                                uart_puts("\n");
+                                had = true;
+                            }
+                        }
+                    }
                 }
             }
             i += 1;
         }
+    }
+    if !had {
+        uart_puts("ls: not found\n");
     }
 }
 
@@ -621,6 +778,15 @@ fn shell_cat_proc(path: &[u8]) -> bool {
         uart_puts("0.00 0.00\n");
         return true;
     }
+    if path == b"/proc/runtime/map" {
+        let mut data = [0u8; SHELL_IO_MAX];
+        if let Some(len) = shell_read_file(path, &mut data) {
+            uart_put_bytes(&data[..len]);
+        } else {
+            uart_puts("CurrentPid:\t0\nCurrentProc:\tnone\nCurrentTid:\t0\nCurrentThread:\tnone\nCurrentAsid:\t0\nMappings:\t0\n");
+        }
+        return true;
+    }
     if let Some(pid) = parse_proc_status_pid(path) {
         uart_puts("Pid:\t");
         uart_put_u32(pid);
@@ -630,15 +796,40 @@ fn shell_cat_proc(path: &[u8]) -> bool {
     false
 }
 
-fn shell_handle_line(line: &[u8]) -> bool {
+fn shell_handle_line(line: &[u8], mapwatch_enabled: &mut bool, mapwatch_side_enabled: &mut bool) -> bool {
     let line = trim_ascii_spaces(line);
     if line.is_empty() {
         return false;
     }
     if line == b"help" {
         uart_puts(
-            "qos-sh commands:\n  help\n  echo <text>\n  ps\n  ping <ip>\n  ip addr\n  ip route\n  wget <url>\n  ls\n  pwd\n  cat <path>\n  touch <path>\n  edit <path> [text]\n  insmod <path>\n  rmmod <id|path>\n  wqdemo\n  exit\n",
+            "qos-sh commands:\n  help\n  echo <text>\n  ps\n  ping <ip>\n  ip addr\n  ip route\n  wget <url>\n  ls\n  pwd\n  cat <path>\n  touch <path>\n  edit <path> [text]\n  insmod <path>\n  rmmod <id|path>\n  wqdemo\n  mapwatch on|off|side on|off\n  exit\n",
         );
+        return false;
+    }
+    if line == b"mapwatch" {
+        uart_puts("usage: mapwatch on|off|side on|off\n");
+        return false;
+    }
+    if line == b"mapwatch on" {
+        *mapwatch_enabled = true;
+        uart_puts("mapwatch: on\n");
+        return false;
+    }
+    if line == b"mapwatch off" {
+        *mapwatch_enabled = false;
+        uart_puts("mapwatch: off\n");
+        return false;
+    }
+    if line == b"mapwatch side on" {
+        *mapwatch_side_enabled = true;
+        mapwatch_side_emit_snapshot();
+        uart_puts("mapwatch side: on (host stream)\n");
+        return false;
+    }
+    if line == b"mapwatch side off" {
+        *mapwatch_side_enabled = false;
+        uart_puts("mapwatch side: off\n");
         return false;
     }
     if line == b"exit" {
@@ -661,8 +852,17 @@ fn shell_handle_line(line: &[u8]) -> bool {
         uart_puts("/\n");
         return false;
     }
-    if line == b"ls" || line.starts_with(b"ls ") {
-        shell_ls();
+    if line == b"ls" {
+        shell_ls_path(b"/");
+        return false;
+    }
+    if line.starts_with(b"ls ") {
+        let path = trim_ascii_spaces(&line[3..]);
+        if path.is_empty() {
+            shell_ls_path(b"/");
+        } else {
+            shell_ls_path(path);
+        }
         return false;
     }
     if line == b"cat" {
@@ -852,13 +1052,135 @@ fn shell_handle_line(line: &[u8]) -> bool {
     false
 }
 
+fn shell_mapwatch_redraw(line: &[u8]) {
+    fn ansi_pid_color(pid: u32) -> &'static [u8] {
+        match pid % 6 {
+            0 => b"\x1b[1;31m",
+            1 => b"\x1b[1;32m",
+            2 => b"\x1b[1;33m",
+            3 => b"\x1b[1;34m",
+            4 => b"\x1b[1;35m",
+            _ => b"\x1b[1;36m",
+        }
+    }
+
+    fn parse_decimal_from(line: &[u8], mut pos: usize) -> Option<u32> {
+        if pos >= line.len() || !line[pos].is_ascii_digit() {
+            return None;
+        }
+        let mut v = 0u32;
+        while pos < line.len() {
+            let b = line[pos];
+            if !b.is_ascii_digit() {
+                break;
+            }
+            v = v.saturating_mul(10).saturating_add((b - b'0') as u32);
+            pos += 1;
+        }
+        Some(v)
+    }
+
+    fn parse_pid_proc_line(line: &[u8]) -> Option<u32> {
+        let pat = b"pid=";
+        let mut i = 0usize;
+        while i + pat.len() <= line.len() {
+            if &line[i..i + pat.len()] == pat {
+                return parse_decimal_from(line, i + pat.len());
+            }
+            i += 1;
+        }
+        None
+    }
+
+    fn parse_pid_map_line(line: &[u8]) -> Option<u32> {
+        if line.len() < 3 || line[0] != b' ' || line[1] != b' ' || line[2] != b'P' {
+            return None;
+        }
+        parse_decimal_from(line, 3)
+    }
+
+    uart_puts("\x1b[H\x1b[2J");
+    uart_puts("\x1b[1;37m[mapwatch] /proc/runtime/map (use `mapwatch off` to disable)\x1b[0m\n");
+    let mut data = [0u8; SHELL_IO_MAX];
+    if let Some(len) = shell_read_file(b"/proc/runtime/map", &mut data) {
+        let mut start = 0usize;
+        while start < len {
+            let mut end = start;
+            while end < len && data[end] != b'\n' {
+                end += 1;
+            }
+            let line_bytes = &data[start..end];
+            let mut color: &[u8] = b"";
+            if line_bytes.starts_with(b"Proc") {
+                if let Some(pid) = parse_pid_proc_line(line_bytes) {
+                    color = ansi_pid_color(pid);
+                }
+            } else if line_bytes.starts_with(b"  P") {
+                if let Some(pid) = parse_pid_map_line(line_bytes) {
+                    color = ansi_pid_color(pid);
+                }
+            } else if line_bytes.starts_with(b"Map") {
+                color = b"\x1b[1;36m";
+            } else if line_bytes.starts_with(b"Current")
+                || line_bytes.starts_with(b"Processes:")
+                || line_bytes.starts_with(b"Mappings:")
+            {
+                color = b"\x1b[1;33m";
+            }
+            if !color.is_empty() {
+                uart_put_bytes(color);
+            }
+            uart_put_bytes(line_bytes);
+            if !color.is_empty() {
+                uart_puts("\x1b[0m");
+            }
+            uart_puts("\n");
+            start = if end < len { end + 1 } else { end };
+        }
+    } else {
+        uart_puts("CurrentPid:\t0\nCurrentProc:\tnone\nCurrentTid:\t0\nCurrentThread:\tnone\nCurrentAsid:\t0\nMappings:\t0\n");
+    }
+    uart_puts("qos-sh:/> ");
+    if !line.is_empty() {
+        uart_put_bytes(line);
+    }
+}
+
 fn run_serial_shell() -> ! {
     let mut line = [0u8; SHELL_LINE_MAX];
+    let mut mapwatch_enabled = false;
+    let mut mapwatch_side_enabled = false;
     loop {
         let mut len = 0usize;
-        uart_puts("qos-sh:/> ");
+        let mut poll_spins = 0u32;
+        let mut side_spins = 0u32;
+        if mapwatch_enabled {
+            shell_mapwatch_redraw(&line[..len]);
+        } else {
+            uart_puts("qos-sh:/> ");
+        }
         loop {
-            let ch = uart_getc();
+            let ch = match uart_try_getc() {
+                Some(ch) => ch,
+                None => {
+                    if mapwatch_enabled {
+                        poll_spins = poll_spins.saturating_add(1);
+                        if poll_spins >= MAPWATCH_POLL_SPINS {
+                            poll_spins = 0;
+                            shell_mapwatch_redraw(&line[..len]);
+                        }
+                    }
+                    if mapwatch_side_enabled {
+                        side_spins = side_spins.saturating_add(1);
+                        if side_spins >= MAPWATCH_SIDE_POLL_SPINS {
+                            side_spins = 0;
+                            mapwatch_side_emit_snapshot();
+                        }
+                    }
+                    core::hint::spin_loop();
+                    continue;
+                }
+            };
             match ch {
                 b'\r' | b'\n' => {
                     uart_puts("\n");
@@ -879,9 +1201,11 @@ fn run_serial_shell() -> ! {
                 }
                 _ => {}
             }
+            poll_spins = 0;
+            side_spins = 0;
         }
 
-        if shell_handle_line(&line[..len]) {
+        if shell_handle_line(&line[..len], &mut mapwatch_enabled, &mut mapwatch_side_enabled) {
             loop {
                 core::hint::spin_loop();
             }
@@ -907,6 +1231,22 @@ fn run_init_process() -> ! {
     }
     if !shell_ok {
         shell_ok = proc_create(2, 1);
+    }
+    let _ = sched_add_task(1);
+    let _ = vmm_map_as(1, 0x0000_4000, 0x0010_0000, VM_READ | VM_EXEC | VM_USER);
+    let _ = vmm_map_as(1, 0x0000_6000, 0x0010_2000, VM_READ | VM_WRITE | VM_USER);
+    let _ = vmm_map_as(1, 0x7FFF_0000, 0x0010_4000, VM_READ | VM_WRITE | VM_USER);
+    if shell_ok {
+        let _ = sched_add_task(2);
+        let _ = vmm_map_as(2, 0x0000_4000, 0x0020_0000, VM_READ | VM_EXEC | VM_USER);
+        let _ = vmm_map_as(2, 0x0000_6000, 0x0020_2000, VM_READ | VM_WRITE | VM_USER);
+        let _ = vmm_map_as(2, 0x7FFF_0000, 0x0020_4000, VM_READ | VM_WRITE | VM_USER);
+        let _ = sched_next();
+        let _ = sched_next();
+        vmm_set_asid(2);
+    } else {
+        let _ = sched_next();
+        vmm_set_asid(1);
     }
 
     uart_puts("init[1]: starting /sbin/init\n");

@@ -1,20 +1,26 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <limits.h>
+#include <string.h>
 
 #include "generated/cmd_elves.h"
 
 #include "../../c-os/boot/boot_info.h"
 #include "../../c-os/kernel/init_state.h"
 #include "../../c-os/kernel/kernel.h"
+#include "../../c-os/kernel/mm/mm.h"
 #include "../../c-os/kernel/net/net.h"
 #include "../../c-os/kernel/proc/proc.h"
+#include "../../c-os/kernel/sched/sched.h"
 #include "../../c-os/kernel/syscall/syscall.h"
 
 #define UART0 ((volatile uint32_t *)0x09000000u)
 #define UARTFR ((volatile uint32_t *)0x09000018u)
 #define UART_FR_RXFE 0x10u
 #define QOS_SHELL_LINE_MAX 128u
+#define MAPWATCH_POLL_SPINS 200000u
+#define MAPWATCH_SIDE_POLL_SPINS 400000u
+#define SEMIHOSTING_SYS_WRITE0 0x04u
 #define QOS_INIT_PID 1u
 #define QOS_SHELL_PID 2u
 #define QOS_DTB_MAGIC 0xEDFE0DD0u
@@ -288,6 +294,14 @@ static uint8_t uart_getc(void) {
     return (uint8_t)(*UART0 & 0xFFu);
 }
 
+static int uart_try_getc(uint8_t *out_ch) {
+    if (out_ch == 0 || (*UARTFR & UART_FR_RXFE) != 0u) {
+        return 0;
+    }
+    *out_ch = (uint8_t)(*UART0 & 0xFFu);
+    return 1;
+}
+
 static void uart_put_u32(uint32_t value) {
     char buf[16];
     size_t idx = sizeof(buf);
@@ -302,6 +316,32 @@ static void uart_put_u32(uint32_t value) {
         buf[--idx] = (char)('0' + d);
     }
     uart_puts(&buf[idx]);
+}
+
+static void shell_out_clear(char *out, size_t cap);
+static void shell_out_append(char *out, size_t cap, const char *text);
+static int shell_read_file(const char *path, char *out, size_t cap);
+
+static void semihost_write0(const char *s) {
+    register uint64_t x0 __asm__("x0") = (uint64_t)SEMIHOSTING_SYS_WRITE0;
+    register uint64_t x1 __asm__("x1") = (uint64_t)(uintptr_t)s;
+    __asm__ volatile("hlt #0xF000" : "+r"(x0) : "r"(x1) : "memory");
+}
+
+static void mapwatch_side_emit_snapshot(void) {
+    char mapbuf[2048];
+    char out[2304];
+    shell_out_clear(out, sizeof(out));
+    shell_out_append(out, sizeof(out), "[mapwatch-side] /proc/runtime/map\n");
+    if (shell_read_file("/proc/runtime/map", mapbuf, sizeof(mapbuf)) == 0) {
+        shell_out_append(out, sizeof(out), mapbuf);
+    } else {
+        shell_out_append(out, sizeof(out),
+                         "CurrentPid:\t0\nCurrentProc:\tnone\nCurrentTid:\t0\nCurrentThread:\tnone\nCurrentAsid:\t0\n"
+                         "Mappings:\t0\n");
+    }
+    shell_out_append(out, sizeof(out), "\n");
+    semihost_write0(out);
 }
 
 typedef struct {
@@ -353,6 +393,24 @@ static void shell_out_append(char *out, size_t cap, const char *text) {
     }
     room = cap - 1u - cur;
     n = strlen(text);
+    if (n > room) {
+        n = room;
+    }
+    memcpy(out + cur, text, n);
+    out[cur + n] = '\0';
+}
+
+static void shell_out_append_n(char *out, size_t cap, const char *text, size_t n) {
+    size_t cur;
+    size_t room;
+    if (out == 0 || cap == 0 || text == 0 || n == 0) {
+        return;
+    }
+    cur = strlen(out);
+    if (cur >= cap - 1u) {
+        return;
+    }
+    room = cap - 1u - cur;
     if (n > room) {
         n = room;
     }
@@ -907,11 +965,67 @@ static int elf_run_command(uint8_t cmd_id, uint32_t pid, const char *args, const
     }
     if (cmd_id == QOS_ELF_CMD_LS) {
         uint32_t i;
-        shell_out_append(out, out_cap, "bin\n/tmp\n/proc\n/data\n");
-        for (i = 0; i < QOS_ARRAY_LEN(g_shell_file_used); i++) {
-            if (g_shell_file_used[i] != 0) {
-                shell_out_append(out, out_cap, g_shell_files[i]);
-                shell_out_append(out, out_cap, "\n");
+        const char *path = safe_args;
+        if (path[0] == '\0' || strcmp(path, "/") == 0) {
+            shell_out_append(out, out_cap, "bin\n/tmp\n/proc\n/data\n");
+            for (i = 0; i < QOS_ARRAY_LEN(g_shell_file_used); i++) {
+                if (g_shell_file_used[i] != 0) {
+                    shell_out_append(out, out_cap, g_shell_files[i]);
+                    shell_out_append(out, out_cap, "\n");
+                }
+            }
+            return 0;
+        }
+        if (strcmp(path, "/proc") == 0 || strcmp(path, "/proc/") == 0) {
+            shell_out_append(out, out_cap, "meminfo\nkernel/status\nnet/dev\nsyscalls\nuptime\nruntime/map\n");
+            for (i = 1; i < 256; i++) {
+                char status_path[32];
+                int64_t fd;
+                status_path[0] = '\0';
+                shell_out_append(status_path, sizeof(status_path), "/proc/");
+                shell_out_append_u32(status_path, sizeof(status_path), i);
+                shell_out_append(status_path, sizeof(status_path), "/status");
+                fd = qos_syscall_dispatch(SYSCALL_NR_OPEN, (uint64_t)(uintptr_t)status_path, 0, 0, 0);
+                if (fd >= 0) {
+                    (void)qos_syscall_dispatch(SYSCALL_NR_CLOSE, (uint64_t)fd, 0, 0, 0);
+                    shell_out_append_u32(out, out_cap, i);
+                    shell_out_append(out, out_cap, "/status\n");
+                }
+            }
+            return 0;
+        }
+        {
+            size_t path_len = strlen(path);
+            int had = 0;
+            for (i = 0; i < QOS_ARRAY_LEN(g_shell_file_used); i++) {
+                if (g_shell_file_used[i] != 0 && strncmp(g_shell_files[i], path, path_len) == 0) {
+                    const char *full = g_shell_files[i];
+                    const char *rest = full + path_len;
+                    const char *slash;
+                    if (path[path_len - 1] != '/') {
+                        if (*rest != '/') {
+                            continue;
+                        }
+                        rest++;
+                    }
+                    if (*rest == '\0') {
+                        continue;
+                    }
+                    slash = rest;
+                    while (*slash != '\0' && *slash != '/') {
+                        slash++;
+                    }
+                    if (*slash == '/') {
+                        shell_out_append_n(out, out_cap, rest, (size_t)(slash - rest));
+                    } else {
+                        shell_out_append(out, out_cap, rest);
+                    }
+                    shell_out_append(out, out_cap, "\n");
+                    had = 1;
+                }
+            }
+            if (!had) {
+                shell_out_append(out, out_cap, "ls: not found\n");
             }
         }
         return 0;
@@ -1099,7 +1213,7 @@ static int spawn_exec_elf(uint32_t shell_pid, const char *path, const char *args
 }
 
 static void execute_segment(uint32_t shell_pid, char tokens[][128], int n, const char *input, char *out, size_t out_cap,
-                            int *exit_shell) {
+                            int *exit_shell, int *mapwatch_enabled, int *mapwatch_side_enabled) {
     char *argv[32];
     int argc = 0;
     const char *redir_in = 0;
@@ -1142,10 +1256,38 @@ static void execute_segment(uint32_t shell_pid, char tokens[][128], int n, const
         shell_out_append(out, out_cap, "  help\n  echo <text>\n  ps\n  ping <ip>\n  ip addr\n  ip route\n");
         shell_out_append(out, out_cap, "  wget <url>\n  ls\n  cat <path>\n  touch <path>\n  edit <path> [text]\n");
         shell_out_append(out, out_cap, "  insmod <path>\n  rmmod <id|path>\n  wqdemo\n");
+        shell_out_append(out, out_cap, "  mapwatch on|off|side on|off\n");
         shell_out_append(out, out_cap, "  exit\n");
     } else if (strcmp(argv[0], "exit") == 0) {
         shell_out_append(out, out_cap, "logout\n");
         *exit_shell = 1;
+    } else if (strcmp(argv[0], "mapwatch") == 0) {
+        if (argc < 2) {
+            shell_out_append(out, out_cap, "usage: mapwatch on|off|side on|off\n");
+        } else if (strcmp(argv[1], "on") == 0) {
+            if (mapwatch_enabled != 0) {
+                *mapwatch_enabled = 1;
+            }
+            shell_out_append(out, out_cap, "mapwatch: on\n");
+        } else if (strcmp(argv[1], "off") == 0) {
+            if (mapwatch_enabled != 0) {
+                *mapwatch_enabled = 0;
+            }
+            shell_out_append(out, out_cap, "mapwatch: off\n");
+        } else if (argc >= 3 && strcmp(argv[1], "side") == 0 && strcmp(argv[2], "on") == 0) {
+            if (mapwatch_side_enabled != 0) {
+                *mapwatch_side_enabled = 1;
+            }
+            mapwatch_side_emit_snapshot();
+            shell_out_append(out, out_cap, "mapwatch side: on (host stream)\n");
+        } else if (argc >= 3 && strcmp(argv[1], "side") == 0 && strcmp(argv[2], "off") == 0) {
+            if (mapwatch_side_enabled != 0) {
+                *mapwatch_side_enabled = 0;
+            }
+            shell_out_append(out, out_cap, "mapwatch side: off\n");
+        } else {
+            shell_out_append(out, out_cap, "usage: mapwatch on|off|side on|off\n");
+        }
     } else {
         const char *path = resolve_command_path(argv[0], path_buf, sizeof(path_buf));
         size_t pos = 0;
@@ -1174,7 +1316,7 @@ static void execute_segment(uint32_t shell_pid, char tokens[][128], int n, const
     }
 }
 
-static int shell_handle_line(const char *line, uint32_t shell_pid) {
+static int shell_handle_line(const char *line, uint32_t shell_pid, int *mapwatch_enabled, int *mapwatch_side_enabled) {
     char work[256];
     char tokens[64][128];
     int ntok;
@@ -1206,13 +1348,16 @@ static int shell_handle_line(const char *line, uint32_t shell_pid) {
     shell_out_clear(out1, sizeof(out1));
     shell_out_clear(out2, sizeof(out2));
     if (pipe_idx > 0 && pipe_idx < ntok - 1) {
-        execute_segment(shell_pid, tokens, pipe_idx, 0, out1, sizeof(out1), &exit_shell);
-        execute_segment(shell_pid, tokens + pipe_idx + 1, ntok - pipe_idx - 1, out1, out2, sizeof(out2), &exit_shell);
+        execute_segment(shell_pid, tokens, pipe_idx, 0, out1, sizeof(out1), &exit_shell, mapwatch_enabled,
+                        mapwatch_side_enabled);
+        execute_segment(shell_pid, tokens + pipe_idx + 1, ntok - pipe_idx - 1, out1, out2, sizeof(out2), &exit_shell,
+                        mapwatch_enabled, mapwatch_side_enabled);
         if (out2[0] != '\0') {
             uart_puts(out2);
         }
     } else {
-        execute_segment(shell_pid, tokens, ntok, 0, out2, sizeof(out2), &exit_shell);
+        execute_segment(shell_pid, tokens, ntok, 0, out2, sizeof(out2), &exit_shell, mapwatch_enabled,
+                        mapwatch_side_enabled);
         if (out2[0] != '\0') {
             uart_puts(out2);
         }
@@ -1220,13 +1365,53 @@ static int shell_handle_line(const char *line, uint32_t shell_pid) {
     return exit_shell;
 }
 
+static void shell_mapwatch_redraw(const char *line, size_t len) {
+    char mapbuf[2048];
+    uart_puts("\x1b[H\x1b[2J");
+    uart_puts("[mapwatch] /proc/runtime/map (use `mapwatch off` to disable)\n");
+    if (shell_read_file("/proc/runtime/map", mapbuf, sizeof(mapbuf)) == 0) {
+        uart_puts(mapbuf);
+    } else {
+        uart_puts("CurrentPid:\t0\nCurrentProc:\tnone\nCurrentTid:\t0\nCurrentThread:\tnone\nCurrentAsid:\t0\nMappings:\t0\n");
+    }
+    uart_puts("qos-sh:/> ");
+    if (line != 0 && len != 0u) {
+        uart_putn(line, len);
+    }
+}
+
 static void run_serial_shell(uint32_t shell_pid) {
     char line[QOS_SHELL_LINE_MAX];
+    int mapwatch_enabled = 0;
+    int mapwatch_side_enabled = 0;
     for (;;) {
         size_t len = 0;
-        uart_puts("qos-sh:/> ");
+        uint32_t poll_spins = 0;
+        uint32_t side_spins = 0;
+        if (mapwatch_enabled != 0) {
+            shell_mapwatch_redraw(line, len);
+        } else {
+            uart_puts("qos-sh:/> ");
+        }
         for (;;) {
-            uint8_t ch = uart_getc();
+            uint8_t ch = 0;
+            if (uart_try_getc(&ch) == 0) {
+                if (mapwatch_enabled != 0) {
+                    poll_spins++;
+                    if (poll_spins >= MAPWATCH_POLL_SPINS) {
+                        poll_spins = 0;
+                        shell_mapwatch_redraw(line, len);
+                    }
+                }
+                if (mapwatch_side_enabled != 0) {
+                    side_spins++;
+                    if (side_spins >= MAPWATCH_SIDE_POLL_SPINS) {
+                        side_spins = 0;
+                        mapwatch_side_emit_snapshot();
+                    }
+                }
+                continue;
+            }
             if (ch == '\r' || ch == '\n') {
                 uart_puts("\n");
                 break;
@@ -1243,9 +1428,11 @@ static void run_serial_shell(uint32_t shell_pid) {
             }
             line[len++] = (char)ch;
             uart_putn((const char *)&ch, 1);
+            poll_spins = 0;
+            side_spins = 0;
         }
         line[len] = '\0';
-        if (shell_handle_line(line, shell_pid) != 0) {
+        if (shell_handle_line(line, shell_pid, &mapwatch_enabled, &mapwatch_side_enabled) != 0) {
             return;
         }
     }
@@ -1264,6 +1451,22 @@ static void run_init_process(void) {
     }
     if (!shell_ok) {
         shell_ok = qos_proc_create(QOS_SHELL_PID, QOS_INIT_PID) == 0;
+    }
+    (void)qos_sched_add_task(QOS_INIT_PID);
+    (void)qos_vmm_map_as(QOS_INIT_PID, 0x00004000u, 0x00100000u, VM_READ | VM_EXEC | VM_USER);
+    (void)qos_vmm_map_as(QOS_INIT_PID, 0x00006000u, 0x00102000u, VM_READ | VM_WRITE | VM_USER);
+    (void)qos_vmm_map_as(QOS_INIT_PID, 0x7FFF0000u, 0x00104000u, VM_READ | VM_WRITE | VM_USER);
+    if (shell_ok) {
+        (void)qos_sched_add_task(QOS_SHELL_PID);
+        (void)qos_vmm_map_as(QOS_SHELL_PID, 0x00004000u, 0x00200000u, VM_READ | VM_EXEC | VM_USER);
+        (void)qos_vmm_map_as(QOS_SHELL_PID, 0x00006000u, 0x00202000u, VM_READ | VM_WRITE | VM_USER);
+        (void)qos_vmm_map_as(QOS_SHELL_PID, 0x7FFF0000u, 0x00204000u, VM_READ | VM_WRITE | VM_USER);
+        (void)qos_sched_next();
+        (void)qos_sched_next();
+        qos_vmm_set_asid(QOS_SHELL_PID);
+    } else {
+        (void)qos_sched_next();
+        qos_vmm_set_asid(QOS_INIT_PID);
     }
     g_next_pid = QOS_SHELL_PID + 1u;
 

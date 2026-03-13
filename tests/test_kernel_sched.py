@@ -43,13 +43,17 @@ def test_c_sched_round_robin_order() -> None:
     lib.qos_sched_next.restype = ctypes.c_uint32
     lib.qos_sched_count.argtypes = []
     lib.qos_sched_count.restype = ctypes.c_uint32
+    lib.qos_sched_current.argtypes = []
+    lib.qos_sched_current.restype = ctypes.c_uint32
 
     lib.qos_sched_reset()
+    assert lib.qos_sched_current() == 0
     assert lib.qos_sched_add_task(1) == 0
     assert lib.qos_sched_add_task(2) == 0
     assert lib.qos_sched_add_task(3) == 0
     assert lib.qos_sched_count() == 3
     assert [lib.qos_sched_next() for _ in range(4)] == [1, 2, 3, 1]
+    assert lib.qos_sched_current() == 1
 
 
 def test_c_sched_remove_and_duplicate_rules() -> None:

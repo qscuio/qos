@@ -25,6 +25,7 @@ pub const QOS_INIT_ALL: u32 =
 pub const QOS_PAGE_SIZE: u64 = 4096;
 pub const QOS_PMM_MAX_PAGES: usize = 4096;
 pub const QOS_VMM_MAX_MAPPINGS: usize = 2048;
+pub const QOS_VMM_MAX_AS: usize = 64;
 
 pub const VM_READ: u32 = 1 << 0;
 pub const VM_WRITE: u32 = 1 << 1;
@@ -85,7 +86,9 @@ struct VmmState {
     vas: [u64; QOS_VMM_MAX_MAPPINGS],
     pas: [u64; QOS_VMM_MAX_MAPPINGS],
     flags: [u32; QOS_VMM_MAX_MAPPINGS],
+    asids: [u32; QOS_VMM_MAX_MAPPINGS],
     used: [u8; QOS_VMM_MAX_MAPPINGS],
+    current_asid: u32,
 }
 
 impl VmmState {
@@ -94,7 +97,9 @@ impl VmmState {
             vas: [0; QOS_VMM_MAX_MAPPINGS],
             pas: [0; QOS_VMM_MAX_MAPPINGS],
             flags: [0; QOS_VMM_MAX_MAPPINGS],
+            asids: [0; QOS_VMM_MAX_MAPPINGS],
             used: [0; QOS_VMM_MAX_MAPPINGS],
+            current_asid: 0,
         }
     }
 }
@@ -131,6 +136,7 @@ pub const QOS_FD_MAX: usize = 256;
 pub const QOS_PIPE_MAX: usize = 32;
 pub const QOS_PIPE_CAP: usize = 1024;
 pub const QOS_PROC_MAX: usize = 256;
+pub const QOS_PROC_NAME_MAX: usize = 32;
 pub const QOS_SIGNAL_MAX: usize = 32;
 pub const QOS_WAIT_WNOHANG: u32 = 1;
 pub const QOS_SOFTIRQ_MAX: usize = 8;
@@ -139,6 +145,7 @@ pub const QOS_SOFTIRQ_NET_RX: u32 = 1;
 pub const QOS_SOFTIRQ_WORKQUEUE: u32 = 2;
 pub const QOS_TIMER_MAX: usize = 128;
 pub const QOS_KTHREAD_MAX: usize = 64;
+pub const QOS_KTHREAD_NAME_MAX: usize = 32;
 pub const QOS_NAPI_MAX: usize = 32;
 pub const QOS_WORKQUEUE_MAX: usize = 128;
 
@@ -297,6 +304,7 @@ const PROC_FD_KERNEL_STATUS: u8 = 3;
 const PROC_FD_NET_DEV: u8 = 4;
 const PROC_FD_SYSCALLS: u8 = 5;
 const PROC_FD_UPTIME: u8 = 6;
+const PROC_FD_RUNTIME_MAP: u8 = 7;
 const QOS_SOCK_PORT_MIN: u16 = 1024;
 const QOS_SOCK_PORT_MAX: u16 = 65535;
 const QOS_SOCK_PORT_COUNT: usize = QOS_SOCK_PORT_MAX as usize - QOS_SOCK_PORT_MIN as usize + 1;
@@ -323,6 +331,7 @@ struct SchedState {
     pids: [u32; QOS_SCHED_MAX_TASKS],
     count: u32,
     cursor: u32,
+    current_pid: u32,
 }
 
 impl SchedState {
@@ -331,6 +340,7 @@ impl SchedState {
             pids: [0; QOS_SCHED_MAX_TASKS],
             count: 0,
             cursor: 0,
+            current_pid: 0,
         }
     }
 }
@@ -622,6 +632,8 @@ struct ProcState {
     exit_code: [i32; QOS_PROC_MAX],
     cwd: [[u8; QOS_VFS_PATH_MAX]; QOS_PROC_MAX],
     cwd_len: [u8; QOS_PROC_MAX],
+    names: [[u8; QOS_PROC_NAME_MAX]; QOS_PROC_MAX],
+    name_len: [u8; QOS_PROC_MAX],
     sig_handlers: [[u32; QOS_SIGNAL_MAX]; QOS_PROC_MAX],
     sig_pending: [u32; QOS_PROC_MAX],
     sig_blocked: [u32; QOS_PROC_MAX],
@@ -649,6 +661,8 @@ impl ProcState {
             exit_code: [0; QOS_PROC_MAX],
             cwd: [[0; QOS_VFS_PATH_MAX]; QOS_PROC_MAX],
             cwd_len: [0; QOS_PROC_MAX],
+            names: [[0; QOS_PROC_NAME_MAX]; QOS_PROC_MAX],
+            name_len: [0; QOS_PROC_MAX],
             sig_handlers: [[0; QOS_SIGNAL_MAX]; QOS_PROC_MAX],
             sig_pending: [0; QOS_PROC_MAX],
             sig_blocked: [0; QOS_PROC_MAX],
@@ -769,16 +783,22 @@ impl KthreadEntry {
 #[derive(Clone, Copy)]
 struct KthreadState {
     entries: [KthreadEntry; QOS_KTHREAD_MAX],
+    names: [[u8; QOS_KTHREAD_NAME_MAX]; QOS_KTHREAD_MAX],
+    name_len: [u8; QOS_KTHREAD_MAX],
     next_tid: u32,
     cursor: u32,
+    current_tid: u32,
 }
 
 impl KthreadState {
     const fn new() -> Self {
         Self {
             entries: [KthreadEntry::new(); QOS_KTHREAD_MAX],
+            names: [[0; QOS_KTHREAD_NAME_MAX]; QOS_KTHREAD_MAX],
+            name_len: [0; QOS_KTHREAD_MAX],
             next_tid: 1,
             cursor: 0,
+            current_tid: 0,
         }
     }
 }
@@ -1491,10 +1511,14 @@ pub fn vmm_reset() {
     mm_unlock();
 }
 
-fn vmm_find(state: &VmmState, page_va: u64) -> Option<usize> {
+fn asid_valid(asid: u32) -> bool {
+    (asid as usize) < QOS_VMM_MAX_AS
+}
+
+fn vmm_find_as(state: &VmmState, asid: u32, page_va: u64) -> Option<usize> {
     let mut i = 0usize;
     while i < QOS_VMM_MAX_MAPPINGS {
-        if state.used[i] != 0 && state.vas[i] == page_va {
+        if state.used[i] != 0 && state.asids[i] == asid && state.vas[i] == page_va {
             return Some(i);
         }
         i += 1;
@@ -1513,8 +1537,24 @@ fn vmm_free_slot(state: &VmmState) -> Option<usize> {
     None
 }
 
-pub fn vmm_map(va: u64, pa: u64, flags: u32) -> Result<(), KernelError> {
-    if flags == 0 || !is_page_aligned(va) || !is_page_aligned(pa) {
+pub fn vmm_set_asid(asid: u32) {
+    if !asid_valid(asid) {
+        return;
+    }
+    mm_lock();
+    vmm_state_mut().current_asid = asid;
+    mm_unlock();
+}
+
+pub fn vmm_get_asid() -> u32 {
+    mm_lock();
+    let asid = vmm_state().current_asid;
+    mm_unlock();
+    asid
+}
+
+pub fn vmm_map_as(asid: u32, va: u64, pa: u64, flags: u32) -> Result<(), KernelError> {
+    if !asid_valid(asid) || flags == 0 || !is_page_aligned(va) || !is_page_aligned(pa) {
         return Err(KernelError::InvalidAddress);
     }
 
@@ -1522,10 +1562,11 @@ pub fn vmm_map(va: u64, pa: u64, flags: u32) -> Result<(), KernelError> {
     let result = (|| {
         let state = vmm_state_mut();
         let page_va = align_down(va);
-        let idx = if let Some(found) = vmm_find(state, page_va) {
+        let idx = if let Some(found) = vmm_find_as(state, asid, page_va) {
             found
         } else if let Some(slot) = vmm_free_slot(state) {
             state.used[slot] = 1;
+            state.asids[slot] = asid;
             state.vas[slot] = page_va;
             slot
         } else {
@@ -1540,8 +1581,8 @@ pub fn vmm_map(va: u64, pa: u64, flags: u32) -> Result<(), KernelError> {
     result
 }
 
-pub fn vmm_unmap(va: u64) -> bool {
-    if !is_page_aligned(va) {
+pub fn vmm_unmap_as(asid: u32, va: u64) -> bool {
+    if !asid_valid(asid) || !is_page_aligned(va) {
         return false;
     }
 
@@ -1549,8 +1590,9 @@ pub fn vmm_unmap(va: u64) -> bool {
     let ok = (|| {
         let state = vmm_state_mut();
         let page_va = align_down(va);
-        if let Some(idx) = vmm_find(state, page_va) {
+        if let Some(idx) = vmm_find_as(state, asid, page_va) {
             state.used[idx] = 0;
+            state.asids[idx] = 0;
             state.vas[idx] = 0;
             state.pas[idx] = 0;
             state.flags[idx] = 0;
@@ -1563,24 +1605,44 @@ pub fn vmm_unmap(va: u64) -> bool {
     ok
 }
 
-pub fn vmm_translate(va: u64) -> Option<u64> {
+pub fn vmm_unmap(va: u64) -> bool {
+    mm_lock();
+    let asid = vmm_state().current_asid;
+    mm_unlock();
+    vmm_unmap_as(asid, va)
+}
+
+pub fn vmm_translate_as(asid: u32, va: u64) -> Option<u64> {
+    if !asid_valid(asid) {
+        return None;
+    }
     mm_lock();
     let out = (|| {
         let state = vmm_state();
         let page_va = align_down(va);
         let offset = va & (QOS_PAGE_SIZE - 1);
-        vmm_find(state, page_va).map(|idx| state.pas[idx] + offset)
+        vmm_find_as(state, asid, page_va).map(|idx| state.pas[idx] + offset)
     })();
     mm_unlock();
     out
 }
 
-pub fn vmm_flags(va: u64) -> u32 {
+pub fn vmm_translate(va: u64) -> Option<u64> {
+    mm_lock();
+    let asid = vmm_state().current_asid;
+    mm_unlock();
+    vmm_translate_as(asid, va)
+}
+
+pub fn vmm_flags_as(asid: u32, va: u64) -> u32 {
+    if !asid_valid(asid) {
+        return 0;
+    }
     mm_lock();
     let out = (|| {
         let state = vmm_state();
         let page_va = align_down(va);
-        if let Some(idx) = vmm_find(state, page_va) {
+        if let Some(idx) = vmm_find_as(state, asid, page_va) {
             state.flags[idx]
         } else {
             0
@@ -1588,6 +1650,85 @@ pub fn vmm_flags(va: u64) -> u32 {
     })();
     mm_unlock();
     out
+}
+
+pub fn vmm_flags(va: u64) -> u32 {
+    mm_lock();
+    let asid = vmm_state().current_asid;
+    mm_unlock();
+    vmm_flags_as(asid, va)
+}
+
+pub fn vmm_mapping_count_as(asid: u32) -> u32 {
+    if !asid_valid(asid) {
+        return 0;
+    }
+    mm_lock();
+    let count = {
+        let state = vmm_state();
+        let mut i = 0usize;
+        let mut n = 0u32;
+        while i < QOS_VMM_MAX_MAPPINGS {
+            if state.used[i] != 0 && state.asids[i] == asid {
+                n = n.saturating_add(1);
+            }
+            i += 1;
+        }
+        n
+    };
+    mm_unlock();
+    count
+}
+
+pub fn vmm_mapping_count() -> u32 {
+    mm_lock();
+    let asid = vmm_state().current_asid;
+    mm_unlock();
+    vmm_mapping_count_as(asid)
+}
+
+pub fn vmm_mapping_get_as(asid: u32, ordinal: u32) -> Option<(u64, u64, u32)> {
+    if !asid_valid(asid) {
+        return None;
+    }
+    mm_lock();
+    let out = {
+        let state = vmm_state();
+        let mut i = 0usize;
+        let mut seen = 0u32;
+        let mut map = None;
+        while i < QOS_VMM_MAX_MAPPINGS {
+            if state.used[i] != 0 && state.asids[i] == asid {
+                if seen == ordinal {
+                    map = Some((state.vas[i], state.pas[i], state.flags[i]));
+                    break;
+                }
+                seen = seen.saturating_add(1);
+            }
+            i += 1;
+        }
+        map
+    };
+    mm_unlock();
+    out
+}
+
+pub fn vmm_mapping_get(ordinal: u32) -> Option<(u64, u64, u32)> {
+    mm_lock();
+    let asid = vmm_state().current_asid;
+    mm_unlock();
+    vmm_mapping_get_as(asid, ordinal)
+}
+
+pub fn vmm_map(va: u64, pa: u64, flags: u32) -> Result<(), KernelError> {
+    if flags == 0 || !is_page_aligned(va) || !is_page_aligned(pa) {
+        return Err(KernelError::InvalidAddress);
+    }
+
+    mm_lock();
+    let asid = vmm_state().current_asid;
+    mm_unlock();
+    vmm_map_as(asid, va, pa, flags)
 }
 
 pub fn sched_reset() {
@@ -1647,6 +1788,9 @@ pub fn sched_remove_task(pid: u32) -> bool {
 
         state.count -= 1;
         state.pids[state.count as usize] = 0;
+        if state.current_pid == pid {
+            state.current_pid = 0;
+        }
         if state.count == 0 || state.cursor >= state.count {
             state.cursor = 0;
         }
@@ -1668,16 +1812,25 @@ pub fn sched_next() -> Option<u32> {
     let next = (|| {
         let state = sched_state_mut();
         if state.count == 0 {
+            state.current_pid = 0;
             return None;
         }
 
         let idx = state.cursor as usize;
         let pid = state.pids[idx];
         state.cursor = (state.cursor + 1) % state.count;
+        state.current_pid = pid;
         Some(pid)
     })();
     sched_unlock();
     next
+}
+
+pub fn sched_current() -> u32 {
+    sched_lock();
+    let pid = sched_state().current_pid;
+    sched_unlock();
+    pid
 }
 
 fn vfs_path_valid(path: &str) -> bool {
@@ -2680,6 +2833,23 @@ fn kthread_find_slot(state: &KthreadState, tid: u32) -> Option<usize> {
     None
 }
 
+fn kthread_name_init_slot(state: &mut KthreadState, slot: usize, tid: u32) {
+    let prefix = b"kthread-";
+    let mut off = 0usize;
+    while off < prefix.len() && off < (QOS_KTHREAD_NAME_MAX.saturating_sub(1)) {
+        state.names[slot][off] = prefix[off];
+        off += 1;
+    }
+    if off < (QOS_KTHREAD_NAME_MAX.saturating_sub(1)) {
+        off += write_u32_ascii(&mut state.names[slot][off..QOS_KTHREAD_NAME_MAX - 1], tid);
+    }
+    if off >= QOS_KTHREAD_NAME_MAX {
+        off = QOS_KTHREAD_NAME_MAX - 1;
+    }
+    state.names[slot][off] = 0;
+    state.name_len[slot] = off as u8;
+}
+
 pub fn kthread_reset() {
     kthread_lock();
     *kthread_state_mut() = KthreadState::new();
@@ -2706,6 +2876,7 @@ pub fn kthread_create(entry: KthreadFn, arg: usize) -> Option<u32> {
                 state.entries[i].entry = Some(entry);
                 state.entries[i].arg = arg;
                 state.entries[i].run_count = 0;
+                kthread_name_init_slot(state, i, tid);
                 out = Some(tid);
                 break;
             }
@@ -2806,10 +2977,14 @@ pub fn kthread_run_next() -> u32 {
                 };
                 entry.run_count = entry.run_count.saturating_add(1);
                 state.cursor = ((idx + 1) % QOS_KTHREAD_MAX) as u32;
+                state.current_tid = entry.tid;
                 out = Some((entry.tid, fn_ptr, entry.arg));
                 break;
             }
             scanned += 1;
+        }
+        if out.is_none() {
+            state.current_tid = 0;
         }
         out
     };
@@ -2821,6 +2996,37 @@ pub fn kthread_run_next() -> u32 {
     } else {
         0
     }
+}
+
+pub fn kthread_current_tid() -> u32 {
+    kthread_lock();
+    let tid = kthread_state().current_tid;
+    kthread_unlock();
+    tid
+}
+
+pub fn kthread_name_get(tid: u32, out: &mut [u8]) -> Option<usize> {
+    if out.is_empty() {
+        return None;
+    }
+    kthread_lock();
+    let copied = {
+        let state = kthread_state();
+        let slot = kthread_find_slot(state, tid)?;
+        let len = state.name_len[slot] as usize;
+        if len + 1 > out.len() {
+            None
+        } else {
+            let mut i = 0usize;
+            while i <= len {
+                out[i] = state.names[slot][i];
+                i += 1;
+            }
+            Some(len)
+        }
+    };
+    kthread_unlock();
+    copied
 }
 
 fn napi_find_slot(state: &NapiState, napi_id: u32) -> Option<usize> {
@@ -4287,6 +4493,9 @@ fn syscall_proc_path_kind(path: &str) -> Option<(u8, u32)> {
     if path == "/proc/uptime" {
         return Some((PROC_FD_UPTIME, 0));
     }
+    if path == "/proc/runtime/map" {
+        return Some((PROC_FD_RUNTIME_MAP, 0));
+    }
     if !path.starts_with("/proc/") || !path.ends_with("/status") {
         return None;
     }
@@ -4333,6 +4542,37 @@ fn append_u32_ascii(out: &mut [u8], cursor: &mut usize, value: u32) {
     while n > 0 {
         n -= 1;
         append_bytes(out, cursor, &buf[n..n + 1]);
+    }
+}
+
+fn append_u32_hex(out: &mut [u8], cursor: &mut usize, mut value: u32) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    if value == 0 {
+        append_bytes(out, cursor, b"0");
+        return;
+    }
+    let mut tmp = [0u8; 8];
+    let mut n = 0usize;
+    while value != 0 && n < tmp.len() {
+        tmp[n] = HEX[(value & 0xF) as usize];
+        value >>= 4;
+        n += 1;
+    }
+    while n > 0 {
+        n -= 1;
+        append_bytes(out, cursor, &tmp[n..n + 1]);
+    }
+}
+
+fn append_u64_hex_fixed(out: &mut [u8], cursor: &mut usize, value: u64, digits: usize) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digits = core::cmp::min(digits, 16);
+    let mut i = 0usize;
+    while i < digits {
+        let shift = ((digits - 1 - i) * 4) as u32;
+        let nibble = ((value >> shift) & 0xF) as usize;
+        append_bytes(out, cursor, &HEX[nibble..nibble + 1]);
+        i += 1;
     }
 }
 
@@ -4392,6 +4632,113 @@ fn syscall_proc_render(state: &SyscallState, fd_idx: usize, out: &mut [u8]) -> u
         }
         PROC_FD_UPTIME => {
             append_bytes(out, &mut total, b"0.00 0.00\n");
+        }
+        PROC_FD_RUNTIME_MAP => {
+            let current_pid = sched_current();
+            let current_tid = kthread_current_tid();
+            let asid = vmm_get_asid();
+            let map_count = vmm_mapping_count_as(asid);
+            let proc_total = proc_count();
+            let mut proc_name = [0u8; QOS_PROC_NAME_MAX];
+            let mut thread_name = [0u8; QOS_KTHREAD_NAME_MAX];
+            let proc_name_len = if current_pid == 0 {
+                None
+            } else {
+                proc_name_get(current_pid, &mut proc_name)
+            };
+            let thread_name_len = if current_tid == 0 {
+                None
+            } else {
+                kthread_name_get(current_tid, &mut thread_name)
+            };
+
+            append_bytes(out, &mut total, b"CurrentPid:\t");
+            append_u32_ascii(out, &mut total, current_pid);
+            append_bytes(out, &mut total, b"\nCurrentProc:\t");
+            if let Some(len) = proc_name_len {
+                append_bytes(out, &mut total, &proc_name[..len]);
+            } else {
+                append_bytes(out, &mut total, b"none");
+            }
+            append_bytes(out, &mut total, b"\nCurrentTid:\t");
+            append_u32_ascii(out, &mut total, current_tid);
+            append_bytes(out, &mut total, b"\nCurrentThread:\t");
+            if let Some(len) = thread_name_len {
+                append_bytes(out, &mut total, &thread_name[..len]);
+            } else {
+                append_bytes(out, &mut total, b"none");
+            }
+            append_bytes(out, &mut total, b"\nCurrentAsid:\t");
+            append_u32_ascii(out, &mut total, asid);
+            append_bytes(out, &mut total, b"\nMappings:\t");
+            append_u32_ascii(out, &mut total, map_count);
+            append_bytes(out, &mut total, b"\n");
+            append_bytes(out, &mut total, b"Processes:\t");
+            append_u32_ascii(out, &mut total, proc_total);
+            append_bytes(out, &mut total, b"\n");
+
+            let mut idx = 0u32;
+            while idx < map_count {
+                if let Some((va, pa, flags)) = vmm_mapping_get_as(asid, idx) {
+                    append_bytes(out, &mut total, b"Map");
+                    append_u32_ascii(out, &mut total, idx);
+                    append_bytes(out, &mut total, b":\t0x");
+                    append_u64_hex_fixed(out, &mut total, va, 16);
+                    append_bytes(out, &mut total, b"->0x");
+                    append_u64_hex_fixed(out, &mut total, pa, 16);
+                    append_bytes(out, &mut total, b" f=0x");
+                    append_u32_hex(out, &mut total, flags);
+                    append_bytes(out, &mut total, b"\n");
+                }
+                idx += 1;
+            }
+
+            let mut pidx = 0u32;
+            while pidx < proc_total {
+                if let Some(pid) = proc_pid_at(pidx) {
+                    let pmap_count = vmm_mapping_count_as(pid);
+                    let mut pname = [0u8; QOS_PROC_NAME_MAX];
+                    let pname_len = proc_name_get(pid, &mut pname);
+                    append_bytes(out, &mut total, b"Proc");
+                    append_u32_ascii(out, &mut total, pidx);
+                    append_bytes(out, &mut total, b":\tpid=");
+                    append_u32_ascii(out, &mut total, pid);
+                    append_bytes(out, &mut total, b" name=");
+                    if let Some(n) = pname_len {
+                        append_bytes(out, &mut total, &pname[..n]);
+                    } else {
+                        append_bytes(out, &mut total, b"none");
+                    }
+                    append_bytes(out, &mut total, b" maps=");
+                    append_u32_ascii(out, &mut total, pmap_count);
+                    if pid == current_pid {
+                        append_bytes(out, &mut total, b" current");
+                    }
+                    if pid == asid {
+                        append_bytes(out, &mut total, b" asid");
+                    }
+                    append_bytes(out, &mut total, b"\n");
+
+                    let mut midx = 0u32;
+                    while midx < pmap_count {
+                        if let Some((va, pa, flags)) = vmm_mapping_get_as(pid, midx) {
+                            append_bytes(out, &mut total, b"  P");
+                            append_u32_ascii(out, &mut total, pid);
+                            append_bytes(out, &mut total, b"Map");
+                            append_u32_ascii(out, &mut total, midx);
+                            append_bytes(out, &mut total, b":\t0x");
+                            append_u64_hex_fixed(out, &mut total, va, 16);
+                            append_bytes(out, &mut total, b"->0x");
+                            append_u64_hex_fixed(out, &mut total, pa, 16);
+                            append_bytes(out, &mut total, b" f=0x");
+                            append_u32_hex(out, &mut total, flags);
+                            append_bytes(out, &mut total, b"\n");
+                        }
+                        midx += 1;
+                    }
+                }
+                pidx += 1;
+            }
         }
         PROC_FD_STATUS => {
             let pid = state.fd_proc_pid[fd_idx];
@@ -4485,7 +4832,7 @@ pub fn syscall_dispatch(nr: u32, a0: u64, a1: u64, a2: u64, a3: u64) -> i64 {
             let fd_idx = fd as usize;
             if state.fd_kind[fd_idx] == FD_KIND_PROC {
                 let offset = state.fd_offset[fd_idx] as usize;
-                let mut tmp = [0u8; 256];
+                let mut tmp = [0u8; 2048];
                 let total = syscall_proc_render(state, fd_idx, &mut tmp);
                 if offset >= total {
                     return 0;
@@ -5242,7 +5589,7 @@ pub fn syscall_dispatch(nr: u32, a0: u64, a1: u64, a2: u64, a3: u64) -> i64 {
                 state.fd_offset[fd as usize] as i64
             } else if whence == 2 {
                 if state.fd_kind[fd as usize] == FD_KIND_PROC {
-                    let mut tmp = [0u8; 256];
+                    let mut tmp = [0u8; 2048];
                     syscall_proc_render(state, fd as usize, &mut tmp) as i64
                 } else {
                     let file_id = state.fd_file_id[fd as usize] as usize;
@@ -5642,6 +5989,47 @@ fn proc_cwd_set_idx(state: &mut ProcState, idx: usize, path: &str) -> bool {
     true
 }
 
+fn write_u32_ascii(out: &mut [u8], value: u32) -> usize {
+    if out.is_empty() {
+        return 0;
+    }
+    if value == 0 {
+        out[0] = b'0';
+        return 1;
+    }
+    let mut tmp = [0u8; 16];
+    let mut n = 0usize;
+    let mut v = value;
+    while v > 0 && n < tmp.len() {
+        tmp[n] = b'0' + (v % 10) as u8;
+        v /= 10;
+        n += 1;
+    }
+    let mut i = 0usize;
+    while i < n && i < out.len() {
+        out[i] = tmp[n - 1 - i];
+        i += 1;
+    }
+    i
+}
+
+fn proc_name_init_idx(state: &mut ProcState, idx: usize, pid: u32) {
+    let prefix = b"proc-";
+    let mut off = 0usize;
+    while off < prefix.len() && off < (QOS_PROC_NAME_MAX.saturating_sub(1)) {
+        state.names[idx][off] = prefix[off];
+        off += 1;
+    }
+    if off < (QOS_PROC_NAME_MAX.saturating_sub(1)) {
+        off += write_u32_ascii(&mut state.names[idx][off..QOS_PROC_NAME_MAX - 1], pid);
+    }
+    if off >= QOS_PROC_NAME_MAX {
+        off = QOS_PROC_NAME_MAX - 1;
+    }
+    state.names[idx][off] = 0;
+    state.name_len[idx] = off as u8;
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProcExecImage {
     pub entry: u64,
@@ -5694,6 +6082,7 @@ pub fn proc_create(pid: u32, ppid: u32) -> bool {
         if !proc_cwd_set_idx(state, slot, "/") {
             return false;
         }
+        proc_name_init_idx(state, slot, pid);
         state.sig_handlers[slot] = [QOS_SIG_DFL; QOS_SIGNAL_MAX];
         state.sig_pending[slot] = 0;
         state.sig_blocked[slot] = 0;
@@ -5723,6 +6112,8 @@ pub fn proc_remove(pid: u32) -> bool {
         state.ppids[idx] = 0;
         state.cwd[idx] = [0; QOS_VFS_PATH_MAX];
         state.cwd_len[idx] = 0;
+        state.names[idx] = [0; QOS_PROC_NAME_MAX];
+        state.name_len[idx] = 0;
         state.sig_handlers[idx] = [QOS_SIG_DFL; QOS_SIGNAL_MAX];
         state.sig_pending[idx] = 0;
         state.sig_blocked[idx] = 0;
@@ -5765,6 +6156,52 @@ pub fn proc_count() -> u32 {
     let count = proc_state().count;
     proc_unlock();
     count
+}
+
+pub fn proc_pid_at(ordinal: u32) -> Option<u32> {
+    proc_lock();
+    let pid = {
+        let state = proc_state();
+        let mut i = 0usize;
+        let mut seen = 0u32;
+        let mut out = None;
+        while i < QOS_PROC_MAX {
+            if state.used[i] != 0 {
+                if seen == ordinal {
+                    out = Some(state.pids[i]);
+                    break;
+                }
+                seen = seen.saturating_add(1);
+            }
+            i += 1;
+        }
+        out
+    };
+    proc_unlock();
+    pid
+}
+
+pub fn proc_name_get(pid: u32, out: &mut [u8]) -> Option<usize> {
+    if out.is_empty() {
+        return None;
+    }
+    proc_lock();
+    let copied = (|| {
+        let state = proc_state();
+        let idx = proc_find(state, pid)?;
+        let len = state.name_len[idx] as usize;
+        if len + 1 > out.len() {
+            return None;
+        }
+        let mut i = 0usize;
+        while i <= len {
+            out[i] = state.names[idx][i];
+            i += 1;
+        }
+        Some(len)
+    })();
+    proc_unlock();
+    copied
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -5918,6 +6355,7 @@ pub fn proc_fork(parent_pid: u32, child_pid: u32) -> bool {
         state.ppids[child_idx] = parent_pid;
         state.cwd[child_idx] = state.cwd[parent_idx];
         state.cwd_len[child_idx] = state.cwd_len[parent_idx];
+        proc_name_init_idx(state, child_idx, child_pid);
         state.sig_handlers[child_idx] = state.sig_handlers[parent_idx];
         state.sig_blocked[child_idx] = state.sig_blocked[parent_idx];
         state.sig_pending[child_idx] = 0;
@@ -6019,6 +6457,8 @@ fn proc_wait_inner(state: &mut ProcState, parent_pid: u32, pid: i32, options: u3
     state.ppids[idx] = 0;
     state.cwd[idx] = [0; QOS_VFS_PATH_MAX];
     state.cwd_len[idx] = 0;
+    state.names[idx] = [0; QOS_PROC_NAME_MAX];
+    state.name_len[idx] = 0;
     state.sig_handlers[idx] = [QOS_SIG_DFL; QOS_SIGNAL_MAX];
     state.sig_pending[idx] = 0;
     state.sig_blocked[idx] = 0;

@@ -18,6 +18,7 @@ int qos_sched_set_priority(uint32_t pid, uint32_t priority);
 int qos_sched_get_priority(uint32_t pid, uint32_t *out_priority);
 uint32_t qos_sched_count(void);
 uint32_t qos_sched_next(void);
+uint32_t qos_sched_current(void);
 
 void sched_init(void);
 

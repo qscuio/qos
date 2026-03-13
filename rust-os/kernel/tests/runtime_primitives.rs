@@ -1,10 +1,10 @@
 use qos_kernel::{
-    kthread_count, kthread_create, kthread_reset, kthread_run_count, kthread_run_next, kthread_stop,
-    kthread_wake, napi_complete, napi_init, napi_pending_count, napi_register, napi_reset,
-    napi_run_count, napi_schedule, softirq_pending_mask, softirq_raise, softirq_register, softirq_reset,
-    softirq_run, timer_active_count, timer_add, timer_cancel, timer_init, timer_pending_count,
-    timer_reset, timer_tick, workqueue_cancel, workqueue_completed_count, workqueue_enqueue,
-    workqueue_init, workqueue_pending_count, workqueue_reset,
+    kthread_count, kthread_create, kthread_current_tid, kthread_name_get, kthread_reset, kthread_run_count,
+    kthread_run_next, kthread_stop, kthread_wake, napi_complete, napi_init, napi_pending_count,
+    napi_register, napi_reset, napi_run_count, napi_schedule, softirq_pending_mask, softirq_raise,
+    softirq_register, softirq_reset, softirq_run, timer_active_count, timer_add, timer_cancel, timer_init,
+    timer_pending_count, timer_reset, timer_tick, workqueue_cancel, workqueue_completed_count,
+    workqueue_enqueue, workqueue_init, workqueue_pending_count, workqueue_reset,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -118,9 +118,14 @@ fn kthread_create_run_stop_and_wake() {
     let tid2 = kthread_create(kthread_cb, 2).expect("tid2");
     assert_ne!(tid1, tid2);
     assert_eq!(kthread_count(), 2);
+    let mut name1 = [0u8; 32];
+    assert_eq!(kthread_name_get(tid1, &mut name1), Some(9));
+    assert_eq!(&name1[..9], b"kthread-1");
 
     assert_eq!(kthread_run_next(), tid1);
+    assert_eq!(kthread_current_tid(), tid1);
     assert_eq!(kthread_run_next(), tid2);
+    assert_eq!(kthread_current_tid(), tid2);
     assert_eq!(KT1_HITS.load(Ordering::SeqCst), 1);
     assert_eq!(KT2_HITS.load(Ordering::SeqCst), 1);
 
@@ -130,6 +135,7 @@ fn kthread_create_run_stop_and_wake() {
 
     assert!(kthread_wake(tid1));
     assert_eq!(kthread_run_next(), tid1);
+    assert_eq!(kthread_current_tid(), tid1);
     assert_eq!(KT1_HITS.load(Ordering::SeqCst), 2);
     assert_eq!(kthread_run_count(tid1), 2);
     assert_eq!(kthread_run_count(tid2), 2);

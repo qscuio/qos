@@ -37,6 +37,10 @@ int qos_vmm_map_as(uint32_t asid, uint64_t va, uint64_t pa, uint32_t flags);
 int qos_vmm_unmap_as(uint32_t asid, uint64_t va);
 uint64_t qos_vmm_translate_as(uint32_t asid, uint64_t va);
 uint32_t qos_vmm_flags_as(uint32_t asid, uint64_t va);
+uint32_t qos_vmm_mapping_count(void);
+uint32_t qos_vmm_mapping_count_as(uint32_t asid);
+int qos_vmm_mapping_get(uint32_t ordinal, uint64_t *out_va, uint64_t *out_pa, uint32_t *out_flags);
+int qos_vmm_mapping_get_as(uint32_t asid, uint32_t ordinal, uint64_t *out_va, uint64_t *out_pa, uint32_t *out_flags);
 
 void mm_init(void);
 

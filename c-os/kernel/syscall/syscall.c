@@ -17,10 +17,12 @@ extern uint32_t qos_kernel_init_state(void) QOS_WEAK;
 extern uint32_t qos_pmm_total_pages(void) QOS_WEAK;
 extern uint32_t qos_pmm_free_pages(void) QOS_WEAK;
 extern uint32_t qos_sched_count(void) QOS_WEAK;
+extern uint32_t qos_sched_current(void) QOS_WEAK;
 extern uint32_t qos_vfs_count(void) QOS_WEAK;
 extern uint32_t qos_net_queue_len(void) QOS_WEAK;
 extern uint32_t qos_drivers_count(void) QOS_WEAK;
 extern uint32_t qos_proc_count(void) QOS_WEAK;
+extern int32_t qos_proc_name_get(uint32_t pid, char *out, uint32_t out_len) QOS_WEAK;
 extern int qos_proc_fork(uint32_t parent_pid, uint32_t child_pid) QOS_WEAK;
 extern int qos_proc_exec_signal_reset(uint32_t pid) QOS_WEAK;
 extern int qos_proc_exec_image_set(uint32_t pid, const qos_proc_exec_image_t *image) QOS_WEAK;
@@ -45,7 +47,16 @@ extern int qos_proc_signal_sigreturn(uint32_t pid, const qos_sigframe_t *frame) 
 extern int32_t qos_proc_signal_next(uint32_t pid) QOS_WEAK;
 extern int qos_vmm_map(uint64_t va, uint64_t pa, uint32_t flags) QOS_WEAK;
 extern int qos_vmm_unmap(uint64_t va) QOS_WEAK;
+extern uint32_t qos_vmm_get_asid(void) QOS_WEAK;
+extern uint32_t qos_vmm_mapping_count_as(uint32_t asid) QOS_WEAK;
+extern int qos_vmm_mapping_get_as(uint32_t asid,
+                                  uint32_t ordinal,
+                                  uint64_t *out_va,
+                                  uint64_t *out_pa,
+                                  uint32_t *out_flags) QOS_WEAK;
 extern uint32_t qos_sched_next(void) QOS_WEAK;
+extern uint32_t qos_kthread_current_tid(void) QOS_WEAK;
+extern int32_t qos_kthread_name_get(uint32_t tid, char *out, uint32_t out_len) QOS_WEAK;
 extern int qos_net_enqueue_packet(const void *data, uint32_t len) QOS_WEAK;
 extern int qos_net_dequeue_packet(void *out, uint32_t cap) QOS_WEAK;
 extern int qos_net_udp_bind(uint16_t port) QOS_WEAK;
@@ -86,6 +97,7 @@ static uint32_t g_count = 0;
 #define QOS_PROC_FD_NET_DEV 4U
 #define QOS_PROC_FD_SYSCALLS 5U
 #define QOS_PROC_FD_UPTIME 6U
+#define QOS_PROC_FD_RUNTIME_MAP 7U
 #define QOS_PIPE_MAX 32U
 #define QOS_PIPE_CAP 1024U
 #define QOS_FILE_MAX 128U
@@ -809,6 +821,11 @@ static int proc_path_kind(const char *path, uint8_t *out_kind, uint32_t *out_pid
         *out_pid = 0;
         return 0;
     }
+    if (strcmp(path, "/proc/runtime/map") == 0) {
+        *out_kind = QOS_PROC_FD_RUNTIME_MAP;
+        *out_pid = 0;
+        return 0;
+    }
     if (strncmp(path, "/proc/", 6) != 0) {
         return -1;
     }
@@ -865,6 +882,43 @@ static uint32_t render_append_u32(char *out, uint32_t cap, uint32_t off, uint32_
         }
     }
     return off + n;
+}
+
+static uint32_t render_append_u32_hex(char *out, uint32_t cap, uint32_t off, uint32_t value) {
+    static const char hex[] = "0123456789abcdef";
+    char tmp[8];
+    uint32_t n = 0;
+    uint32_t i;
+    if (value == 0u) {
+        return render_append_text(out, cap, off, "0");
+    }
+    while (value != 0u && n < (uint32_t)sizeof(tmp)) {
+        tmp[n++] = hex[value & 0xFu];
+        value >>= 4;
+    }
+    for (i = 0; i < n; i++) {
+        if (out != 0 && off + i + 1u < cap) {
+            out[off + i] = tmp[n - 1u - i];
+        }
+    }
+    return off + n;
+}
+
+static uint32_t render_append_u64_hex_fixed(char *out, uint32_t cap, uint32_t off, uint64_t value, uint32_t digits) {
+    static const char hex[] = "0123456789abcdef";
+    uint32_t i = 0;
+    if (digits > 16u) {
+        digits = 16u;
+    }
+    while (i < digits) {
+        uint32_t shift = (digits - 1u - i) * 4u;
+        uint32_t nibble = (uint32_t)((value >> shift) & 0xFu);
+        if (out != 0 && off + i + 1u < cap) {
+            out[off + i] = hex[nibble];
+        }
+        i++;
+    }
+    return off + digits;
 }
 
 static uint32_t proc_fd_render(uint32_t fd, char *out, uint32_t cap) {
@@ -929,6 +983,114 @@ static uint32_t proc_fd_render(uint32_t fd, char *out, uint32_t cap) {
         total = render_append_text(out, cap, total, "\n");
     } else if (kind == QOS_PROC_FD_UPTIME) {
         total = render_append_text(out, cap, total, "0.00 0.00\n");
+    } else if (kind == QOS_PROC_FD_RUNTIME_MAP) {
+        uint32_t current_pid = qos_sched_current != 0 ? qos_sched_current() : 0;
+        uint32_t current_tid = qos_kthread_current_tid != 0 ? qos_kthread_current_tid() : 0;
+        uint32_t asid = qos_vmm_get_asid != 0 ? qos_vmm_get_asid() : 0;
+        uint32_t map_count = qos_vmm_mapping_count_as != 0 ? qos_vmm_mapping_count_as(asid) : 0;
+        uint32_t idx = 0;
+        uint32_t pslot = 0;
+        uint32_t seen = 0;
+        char proc_name[QOS_PROC_NAME_MAX];
+        char thread_name[QOS_KTHREAD_NAME_MAX];
+        proc_name[0] = '\0';
+        thread_name[0] = '\0';
+
+        if (current_pid != 0 && qos_proc_name_get != 0) {
+            if (qos_proc_name_get(current_pid, proc_name, QOS_PROC_NAME_MAX) < 0) {
+                proc_name[0] = '\0';
+            }
+        }
+        if (current_tid != 0 && qos_kthread_name_get != 0) {
+            if (qos_kthread_name_get(current_tid, thread_name, QOS_KTHREAD_NAME_MAX) < 0) {
+                thread_name[0] = '\0';
+            }
+        }
+
+        total = render_append_text(out, cap, total, "CurrentPid:\t");
+        total = render_append_u32(out, cap, total, current_pid);
+        total = render_append_text(out, cap, total, "\nCurrentProc:\t");
+        total = render_append_text(out, cap, total, proc_name[0] != '\0' ? proc_name : "none");
+        total = render_append_text(out, cap, total, "\nCurrentTid:\t");
+        total = render_append_u32(out, cap, total, current_tid);
+        total = render_append_text(out, cap, total, "\nCurrentThread:\t");
+        total = render_append_text(out, cap, total, thread_name[0] != '\0' ? thread_name : "none");
+        total = render_append_text(out, cap, total, "\nCurrentAsid:\t");
+        total = render_append_u32(out, cap, total, asid);
+        total = render_append_text(out, cap, total, "\nMappings:\t");
+        total = render_append_u32(out, cap, total, map_count);
+        total = render_append_text(out, cap, total, "\nProcesses:\t");
+        total = render_append_u32(out, cap, total, proc_total);
+        total = render_append_text(out, cap, total, "\n");
+
+        while (idx < map_count) {
+            uint64_t va = 0;
+            uint64_t pa = 0;
+            uint32_t flags = 0;
+            if (qos_vmm_mapping_get_as != 0 && qos_vmm_mapping_get_as(asid, idx, &va, &pa, &flags) == 0) {
+                total = render_append_text(out, cap, total, "Map");
+                total = render_append_u32(out, cap, total, idx);
+                total = render_append_text(out, cap, total, ":\t0x");
+                total = render_append_u64_hex_fixed(out, cap, total, va, 16u);
+                total = render_append_text(out, cap, total, "->0x");
+                total = render_append_u64_hex_fixed(out, cap, total, pa, 16u);
+                total = render_append_text(out, cap, total, " f=0x");
+                total = render_append_u32_hex(out, cap, total, flags);
+                total = render_append_text(out, cap, total, "\n");
+            }
+            idx++;
+        }
+        while (pslot < 255u) {
+            uint32_t pidx = pslot + 1u;
+            if (qos_proc_alive != 0 && qos_proc_alive(pidx) != 0) {
+                uint32_t p_maps = qos_vmm_mapping_count_as != 0 ? qos_vmm_mapping_count_as(pidx) : 0;
+                uint32_t midx = 0;
+                char pname[QOS_PROC_NAME_MAX];
+                pname[0] = '\0';
+                if (qos_proc_name_get != 0) {
+                    if (qos_proc_name_get(pidx, pname, QOS_PROC_NAME_MAX) < 0) {
+                        pname[0] = '\0';
+                    }
+                }
+
+                total = render_append_text(out, cap, total, "Proc");
+                total = render_append_u32(out, cap, total, seen++);
+                total = render_append_text(out, cap, total, ":\tpid=");
+                total = render_append_u32(out, cap, total, pidx);
+                total = render_append_text(out, cap, total, " name=");
+                total = render_append_text(out, cap, total, pname[0] != '\0' ? pname : "none");
+                total = render_append_text(out, cap, total, " maps=");
+                total = render_append_u32(out, cap, total, p_maps);
+                if (pidx == current_pid) {
+                    total = render_append_text(out, cap, total, " current");
+                }
+                if (pidx == asid) {
+                    total = render_append_text(out, cap, total, " asid");
+                }
+                total = render_append_text(out, cap, total, "\n");
+
+                while (midx < p_maps) {
+                    uint64_t pva = 0;
+                    uint64_t ppa = 0;
+                    uint32_t pflags = 0;
+                    if (qos_vmm_mapping_get_as != 0 && qos_vmm_mapping_get_as(pidx, midx, &pva, &ppa, &pflags) == 0) {
+                        total = render_append_text(out, cap, total, "  P");
+                        total = render_append_u32(out, cap, total, pidx);
+                        total = render_append_text(out, cap, total, "Map");
+                        total = render_append_u32(out, cap, total, midx);
+                        total = render_append_text(out, cap, total, ":\t0x");
+                        total = render_append_u64_hex_fixed(out, cap, total, pva, 16u);
+                        total = render_append_text(out, cap, total, "->0x");
+                        total = render_append_u64_hex_fixed(out, cap, total, ppa, 16u);
+                        total = render_append_text(out, cap, total, " f=0x");
+                        total = render_append_u32_hex(out, cap, total, pflags);
+                        total = render_append_text(out, cap, total, "\n");
+                    }
+                    midx++;
+                }
+            }
+            pslot++;
+        }
     } else if (kind == QOS_PROC_FD_STATUS) {
         const char *state = (qos_proc_alive != 0 && qos_proc_alive(pid) != 0) ? "Running" : "Zombie";
         total = render_append_text(out, cap, total, "Pid:\t");
@@ -1362,7 +1524,7 @@ int64_t qos_syscall_dispatch(uint32_t nr, uint64_t a0, uint64_t a1, uint64_t a2,
 
         if (g_fd_kind[fd] == QOS_FD_KIND_PROC) {
             uint32_t offset = (uint32_t)g_fd_offset[fd];
-            char tmp[256];
+            char tmp[2048];
             uint32_t total = proc_fd_render(fd, tmp, sizeof(tmp));
             uint32_t copy_len;
             if (offset >= total) {

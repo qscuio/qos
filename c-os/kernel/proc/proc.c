@@ -12,6 +12,8 @@ static uint8_t g_stopped[QOS_PROC_MAX];
 static int32_t g_exit_code[QOS_PROC_MAX];
 static char g_cwds[QOS_PROC_MAX][QOS_PROC_CWD_MAX];
 static uint8_t g_cwd_len[QOS_PROC_MAX];
+static char g_names[QOS_PROC_MAX][QOS_PROC_NAME_MAX];
+static uint8_t g_name_len[QOS_PROC_MAX];
 static uint64_t g_sig_handlers[QOS_PROC_MAX][QOS_SIGNAL_MAX];
 static uint32_t g_sig_pending[QOS_PROC_MAX];
 static uint32_t g_sig_blocked[QOS_PROC_MAX];
@@ -54,6 +56,50 @@ static int cwd_set_idx(uint32_t idx, const char *path) {
     memcpy(g_cwds[idx], path, len + 1);
     g_cwd_len[idx] = (uint8_t)len;
     return 0;
+}
+
+static uint32_t write_u32_ascii(char *out, uint32_t cap, uint32_t value) {
+    char tmp[16];
+    uint32_t n = 0;
+    uint32_t i = 0;
+
+    if (cap == 0 || out == 0) {
+        return 0;
+    }
+    if (value == 0) {
+        if (cap > 1) {
+            out[0] = '0';
+        }
+        return 1;
+    }
+
+    while (value != 0 && n < (uint32_t)sizeof(tmp)) {
+        tmp[n++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    while (i < n && i + 1 < cap) {
+        out[i] = tmp[n - 1u - i];
+        i++;
+    }
+    return n;
+}
+
+static void init_name_idx(uint32_t idx, uint32_t pid) {
+    static const char prefix[] = "proc-";
+    uint32_t off = 0;
+    uint32_t i = 0;
+    uint32_t n;
+
+    while (i + 1 < (uint32_t)sizeof(prefix) && off + 1 < QOS_PROC_NAME_MAX) {
+        g_names[idx][off++] = prefix[i++];
+    }
+    n = write_u32_ascii(g_names[idx] + off, QOS_PROC_NAME_MAX - off, pid);
+    off += n;
+    if (off >= QOS_PROC_NAME_MAX) {
+        off = QOS_PROC_NAME_MAX - 1U;
+    }
+    g_names[idx][off] = '\0';
+    g_name_len[idx] = (uint8_t)off;
 }
 
 static void init_signal_state(uint32_t idx) {
@@ -107,6 +153,8 @@ void qos_proc_reset(void) {
     memset(g_exit_code, 0, sizeof(g_exit_code));
     memset(g_cwds, 0, sizeof(g_cwds));
     memset(g_cwd_len, 0, sizeof(g_cwd_len));
+    memset(g_names, 0, sizeof(g_names));
+    memset(g_name_len, 0, sizeof(g_name_len));
     memset(g_sig_handlers, 0, sizeof(g_sig_handlers));
     memset(g_sig_pending, 0, sizeof(g_sig_pending));
     memset(g_sig_blocked, 0, sizeof(g_sig_blocked));
@@ -148,6 +196,7 @@ int qos_proc_create(uint32_t pid, uint32_t ppid) {
     if (cwd_set_idx((uint32_t)slot, "/") != 0) {
         return -1;
     }
+    init_name_idx((uint32_t)slot, pid);
     init_signal_state((uint32_t)slot);
     init_exec_image_state((uint32_t)slot);
     g_count++;
@@ -181,6 +230,7 @@ int qos_proc_fork(uint32_t parent_pid, uint32_t child_pid) {
     g_ppids[(uint32_t)child_idx] = parent_pid;
     memcpy(g_cwds[(uint32_t)child_idx], g_cwds[(uint32_t)parent_idx], QOS_PROC_CWD_MAX);
     g_cwd_len[(uint32_t)child_idx] = g_cwd_len[(uint32_t)parent_idx];
+    init_name_idx((uint32_t)child_idx, child_pid);
     for (s = 0; s < QOS_SIGNAL_MAX; s++) {
         g_sig_handlers[(uint32_t)child_idx][s] = g_sig_handlers[(uint32_t)parent_idx][s];
     }
@@ -215,6 +265,8 @@ int qos_proc_remove(uint32_t pid) {
     g_ppids[(uint32_t)idx] = 0;
     g_cwds[(uint32_t)idx][0] = '\0';
     g_cwd_len[(uint32_t)idx] = 0;
+    g_names[(uint32_t)idx][0] = '\0';
+    g_name_len[(uint32_t)idx] = 0;
     init_signal_state((uint32_t)idx);
     init_exec_image_state((uint32_t)idx);
     g_count--;
@@ -239,6 +291,20 @@ int qos_proc_alive(uint32_t pid) {
 
 uint32_t qos_proc_count(void) {
     return g_count;
+}
+
+int32_t qos_proc_name_get(uint32_t pid, char *out, uint32_t out_len) {
+    int idx = find_pid(pid);
+    uint32_t len;
+    if (idx < 0 || out == 0 || out_len == 0) {
+        return -1;
+    }
+    len = (uint32_t)g_name_len[(uint32_t)idx];
+    if (len + 1 > out_len) {
+        return -1;
+    }
+    memcpy(out, g_names[(uint32_t)idx], len + 1);
+    return (int32_t)len;
 }
 
 int qos_proc_exit(uint32_t pid, int32_t code) {

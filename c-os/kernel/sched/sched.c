@@ -6,6 +6,7 @@ static uint32_t g_queues[QOS_SCHED_LEVELS][QOS_SCHED_MAX_TASKS];
 static uint32_t g_counts[QOS_SCHED_LEVELS];
 static uint32_t g_rr_cursor[QOS_SCHED_LEVELS];
 static uint32_t g_total_count = 0;
+static uint32_t g_current_pid = 0;
 
 static int priority_valid(uint32_t priority) {
     return priority <= QOS_SCHED_PRIO_HIGH;
@@ -129,6 +130,7 @@ void qos_sched_reset(void) {
         i++;
     }
     g_total_count = 0;
+    g_current_pid = 0;
 }
 
 int qos_sched_add_task(uint32_t pid) {
@@ -205,6 +207,7 @@ uint32_t qos_sched_next(void) {
     uint32_t level = QOS_SCHED_LEVELS;
 
     if (g_total_count == 0) {
+        g_current_pid = 0;
         return 0;
     }
 
@@ -215,12 +218,18 @@ uint32_t qos_sched_next(void) {
             uint32_t idx = g_rr_cursor[priority] % count;
             uint32_t pid = g_queues[priority][idx];
             g_rr_cursor[priority] = (idx + 1U) % count;
+            g_current_pid = pid;
             return pid;
         }
         level--;
     }
 
+    g_current_pid = 0;
     return 0;
+}
+
+uint32_t qos_sched_current(void) {
+    return g_current_pid;
 }
 
 void sched_init(void) {

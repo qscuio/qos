@@ -161,8 +161,8 @@ Expected serial output includes:
 Current shell features are split by target:
 
 - x86_64 probe shells: `help`, `echo`, `ps`, `ping`, `ip`, `wget`, `exit`
-- aarch64 C probe shell: adds `ls`, `cat`, `touch`, `edit`, `insmod`, `rmmod`, `wqdemo`, plus shell operators `<`, `>`, `>>`, `|`
-- aarch64 Rust probe shell: supports `ls`, `pwd`, `cat`, `touch`, `edit`, `insmod`, `rmmod`, `wqdemo` in addition to `help`, `echo`, `ps`, `ping`, `ip`, `wget`, `exit`
+- aarch64 C probe shell: adds `ls`, `cat`, `touch`, `edit`, `insmod`, `rmmod`, `wqdemo`, `mapwatch on|off|side on|off`, plus shell operators `<`, `>`, `>>`, `|`
+- aarch64 Rust probe shell: supports `ls`, `pwd`, `cat`, `touch`, `edit`, `insmod`, `rmmod`, `wqdemo`, `mapwatch on|off|side on|off` in addition to `help`, `echo`, `ps`, `ping`, `ip`, `wget`, `exit`
 
 For C/aarch64, each `/bin/*` command image is built from source in
 `tools/aarch64-c-probe/cmd-src/*.c` and embedded as ELF bytes by
@@ -204,7 +204,25 @@ Proc-like kernel info files (via `cat`):
 - `/proc/net/dev`
 - `/proc/syscalls`
 - `/proc/uptime`
+- `/proc/runtime/map`
 - `/proc/<pid>/status`
+
+Live runtime map watcher (SSH-safe, keeps prompt active):
+
+- `mapwatch on`
+- `mapwatch off`
+- `mapwatch side on` (writes live `/proc/runtime/map` snapshots to host-side stream)
+- `mapwatch side off`
+
+Side-stream usage (no shell redraw, good for split SSH terminals):
+
+```bash
+# terminal A: run QEMU (shell stays interactive on UART)
+QOS_MAPWATCH_LOG=/tmp/qos-mapwatch.log ./qemu/aarch64.sh ...
+
+# terminal B: follow live map snapshots
+tail -f /tmp/qos-mapwatch.log
+```
 
 ## Shared Libraries And Hot-Reload Modules
 
@@ -251,6 +269,13 @@ QOS_PCAP_PATH=build/aarch64/manual.pcap ./qemu/aarch64.sh ...
 QOS_HOSTFWD_UDP_HOST_PORT=5555 \
 QOS_HOSTFWD_UDP_GUEST_PORT=5555 \
 ./qemu/aarch64.sh ...
+```
+
+- Side mapwatch stream destination (set `off` to disable):
+
+```bash
+QOS_MAPWATCH_LOG=/tmp/qos-mapwatch.log ./qemu/aarch64.sh ...
+QOS_MAPWATCH_LOG=off ./qemu/aarch64.sh ...
 ```
 
 Preview generated command without launching:

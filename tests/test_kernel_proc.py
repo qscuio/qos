@@ -47,6 +47,8 @@ def test_c_proc_create_lookup_remove_flow() -> None:
     lib.qos_proc_alive.restype = ctypes.c_int
     lib.qos_proc_count.argtypes = []
     lib.qos_proc_count.restype = ctypes.c_uint32
+    lib.qos_proc_name_get.argtypes = [ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32]
+    lib.qos_proc_name_get.restype = ctypes.c_int32
 
     lib.qos_proc_reset()
     assert lib.qos_proc_create(1, 0) == 0
@@ -55,6 +57,11 @@ def test_c_proc_create_lookup_remove_flow() -> None:
     assert lib.qos_proc_count() == 3
     assert lib.qos_proc_parent(2) == 1
     assert lib.qos_proc_alive(3) == 1
+
+    name = ctypes.create_string_buffer(32)
+    assert lib.qos_proc_name_get(2, name, 32) == 6
+    assert name.value == b"proc-2"
+
     assert lib.qos_proc_remove(3) == 0
     assert lib.qos_proc_alive(3) == 0
     assert lib.qos_proc_count() == 2

@@ -1,4 +1,4 @@
-use qos_kernel::{proc_alive, proc_count, proc_create, proc_parent, proc_remove, proc_reset};
+use qos_kernel::{proc_alive, proc_count, proc_create, proc_name_get, proc_parent, proc_remove, proc_reset};
 use std::sync::{Mutex, OnceLock};
 
 fn test_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -14,6 +14,9 @@ fn proc_create_lookup_remove_flow() {
     assert!(proc_create(2, 1));
     assert!(proc_create(3, 1));
     assert_eq!(proc_count(), 3);
+    let mut name = [0u8; 32];
+    assert_eq!(proc_name_get(2, &mut name), Some(6));
+    assert_eq!(&name[..6], b"proc-2");
     assert_eq!(proc_parent(2), Some(1));
     assert!(proc_alive(3));
     assert!(proc_remove(3));

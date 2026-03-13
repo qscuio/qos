@@ -50,6 +50,10 @@ def test_c_kthread_create_run_stop_wake() -> None:
     lib.qos_kthread_run_count.restype = ctypes.c_uint32
     lib.qos_kthread_run_next.argtypes = []
     lib.qos_kthread_run_next.restype = ctypes.c_uint32
+    lib.qos_kthread_current_tid.argtypes = []
+    lib.qos_kthread_current_tid.restype = ctypes.c_uint32
+    lib.qos_kthread_name_get.argtypes = [ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32]
+    lib.qos_kthread_name_get.restype = ctypes.c_int32
 
     t1_hits = ctypes.c_uint32(0)
     t2_hits = ctypes.c_uint32(0)
@@ -63,6 +67,7 @@ def test_c_kthread_create_run_stop_wake() -> None:
     tid2 = ctypes.c_uint32(0)
 
     lib.qos_kthread_reset()
+    assert lib.qos_kthread_current_tid() == 0
     assert lib.qos_kthread_create(thread_main, ctypes.cast(ctypes.pointer(t1_hits), ctypes.c_void_p), ctypes.byref(tid1)) == 0
     assert lib.qos_kthread_create(thread_main, ctypes.cast(ctypes.pointer(t2_hits), ctypes.c_void_p), ctypes.byref(tid2)) == 0
     assert tid1.value != 0
@@ -70,8 +75,14 @@ def test_c_kthread_create_run_stop_wake() -> None:
     assert tid1.value != tid2.value
     assert lib.qos_kthread_count() == 2
 
+    name = ctypes.create_string_buffer(32)
+    assert lib.qos_kthread_name_get(tid1.value, name, 32) == len(f"kthread-{tid1.value}")
+    assert name.value == f"kthread-{tid1.value}".encode()
+
     assert lib.qos_kthread_run_next() == tid1.value
+    assert lib.qos_kthread_current_tid() == tid1.value
     assert lib.qos_kthread_run_next() == tid2.value
+    assert lib.qos_kthread_current_tid() == tid2.value
     assert t1_hits.value == 1
     assert t2_hits.value == 1
 

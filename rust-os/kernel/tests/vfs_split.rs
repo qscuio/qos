@@ -1,8 +1,9 @@
 use qos_boot::boot_info::{BootInfo, MmapEntry, QOS_BOOT_MAGIC};
 use qos_kernel::{
-    kernel_entry, proc_create, syscall_dispatch, vfs_fs_kind, vfs_is_read_only, QOS_VFS_FS_EXT2,
-    QOS_VFS_FS_INITRAMFS, QOS_VFS_FS_PROCFS, QOS_VFS_FS_TMPFS, SYSCALL_NR_CLOSE, SYSCALL_NR_MKDIR,
-    SYSCALL_NR_OPEN, SYSCALL_NR_READ, SYSCALL_NR_UNLINK, SYSCALL_NR_WRITE,
+    kernel_entry, proc_create, sched_add_task, sched_next, syscall_dispatch, vfs_fs_kind, vfs_is_read_only,
+    vmm_map_as, vmm_set_asid, QOS_VFS_FS_EXT2, QOS_VFS_FS_INITRAMFS, QOS_VFS_FS_PROCFS, QOS_VFS_FS_TMPFS,
+    VM_READ, VM_WRITE, SYSCALL_NR_CLOSE, SYSCALL_NR_MKDIR, SYSCALL_NR_OPEN, SYSCALL_NR_READ, SYSCALL_NR_UNLINK,
+    SYSCALL_NR_WRITE,
 };
 use std::ffi::CString;
 use std::sync::{Mutex, OnceLock};
@@ -48,6 +49,10 @@ fn syscall_procfs_split_behavior() {
     let info = valid_boot_info();
     assert!(kernel_entry(&info).is_ok());
     assert!(proc_create(7, 0));
+    assert!(sched_add_task(7));
+    assert_eq!(sched_next(), Some(7));
+    vmm_set_asid(7);
+    assert!(vmm_map_as(7, 0x4000, 0x200000, VM_READ | VM_WRITE).is_ok());
 
     let meminfo = CString::new("/proc/meminfo").expect("cstring");
     let p_meminfo = meminfo.as_ptr() as u64;
@@ -92,6 +97,36 @@ fn syscall_procfs_split_behavior() {
     assert!(status_text.contains("Pid:\t7"));
     assert!(status_text.contains("State:\tRunning"));
     assert_eq!(syscall_dispatch(SYSCALL_NR_CLOSE, fd_status as u64, 0, 0, 0), 0);
+
+    let runtime_map = CString::new("/proc/runtime/map").expect("cstring");
+    let fd_runtime = syscall_dispatch(SYSCALL_NR_OPEN, runtime_map.as_ptr() as u64, 0, 0, 0);
+    assert!(fd_runtime >= 0);
+    let mut out_runtime = [0u8; 1024];
+    let r = syscall_dispatch(
+        SYSCALL_NR_READ,
+        fd_runtime as u64,
+        out_runtime.as_mut_ptr() as u64,
+        out_runtime.len() as u64,
+        0,
+    );
+    assert!(r > 0);
+    let runtime_text = core::str::from_utf8(&out_runtime[..r as usize]).expect("utf8");
+    assert!(runtime_text.contains("CurrentPid:\t7"));
+    assert!(runtime_text.contains("CurrentProc:\tproc-7"));
+    assert!(runtime_text.contains("CurrentThread:\tnone"));
+    assert!(runtime_text.contains("CurrentAsid:\t7"));
+    assert!(runtime_text.contains("Mappings:\t1"));
+    assert!(runtime_text.contains("Processes:\t1"));
+    assert!(
+        runtime_text.contains("Proc0:\tpid=7 name=proc-7 maps=1 current asid"),
+        "{runtime_text}"
+    );
+    assert!(runtime_text.contains("Map0:\t0x0000000000004000->0x0000000000200000 f=0x3"));
+    assert!(
+        runtime_text.contains("P7Map0:\t0x0000000000004000->0x0000000000200000 f=0x3"),
+        "{runtime_text}"
+    );
+    assert_eq!(syscall_dispatch(SYSCALL_NR_CLOSE, fd_runtime as u64, 0, 0, 0), 0);
 
     let missing = CString::new("/proc/999/status").expect("cstring");
     assert_eq!(syscall_dispatch(SYSCALL_NR_OPEN, missing.as_ptr() as u64, 0, 0, 0), -1);

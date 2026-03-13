@@ -7,6 +7,7 @@
 #define QOS_SIGNAL_MAX 32U
 #define QOS_WAIT_WNOHANG 1u
 #define QOS_PROC_CWD_MAX 128U
+#define QOS_PROC_NAME_MAX 32U
 #define QOS_SIG_TRAMPOLINE_VA 0x00007FFF00000000ULL
 
 enum {
@@ -50,6 +51,7 @@ int qos_proc_remove(uint32_t pid);
 int32_t qos_proc_parent(uint32_t pid);
 int qos_proc_alive(uint32_t pid);
 uint32_t qos_proc_count(void);
+int32_t qos_proc_name_get(uint32_t pid, char *out, uint32_t out_len);
 int qos_proc_fork(uint32_t parent_pid, uint32_t child_pid);
 int qos_proc_exit(uint32_t pid, int32_t code);
 int32_t qos_proc_wait(uint32_t parent_pid, int32_t pid, int32_t *out_status, uint32_t options);

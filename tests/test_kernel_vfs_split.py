@@ -97,6 +97,7 @@ def _build_kernel_lib() -> Path:
             str(ROOT / "c-os/kernel/drivers/drivers.c"),
             str(ROOT / "c-os/kernel/syscall/syscall.c"),
             str(ROOT / "c-os/kernel/proc/proc.c"),
+            str(ROOT / "c-os/kernel/kthread/kthread.c"),
         ]
     )
     assert build.returncode == 0, f"gcc failed:\n{build.stderr}\nstdout:\n{build.stdout}"
@@ -140,6 +141,14 @@ def test_c_syscall_procfs_split_behavior() -> None:
     lib.qos_kernel_entry.restype = ctypes.c_int
     lib.qos_proc_create.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
     lib.qos_proc_create.restype = ctypes.c_int
+    lib.qos_sched_add_task.argtypes = [ctypes.c_uint32]
+    lib.qos_sched_add_task.restype = ctypes.c_int
+    lib.qos_sched_next.argtypes = []
+    lib.qos_sched_next.restype = ctypes.c_uint32
+    lib.qos_vmm_set_asid.argtypes = [ctypes.c_uint32]
+    lib.qos_vmm_set_asid.restype = None
+    lib.qos_vmm_map_as.argtypes = [ctypes.c_uint32, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint32]
+    lib.qos_vmm_map_as.restype = ctypes.c_int
     lib.qos_syscall_dispatch.argtypes = [
         ctypes.c_uint32,
         ctypes.c_uint64,
@@ -152,6 +161,10 @@ def test_c_syscall_procfs_split_behavior() -> None:
     info = _valid_boot_info()
     assert lib.qos_kernel_entry(ctypes.byref(info)) == 0
     assert lib.qos_proc_create(7, 0) == 0
+    assert lib.qos_sched_add_task(7) == 0
+    assert lib.qos_sched_next() == 7
+    lib.qos_vmm_set_asid(7)
+    assert lib.qos_vmm_map_as(7, 0x4000, 0x200000, 0x3) == 0
 
     meminfo = ctypes.create_string_buffer(b"/proc/meminfo")
     p_meminfo = ctypes.c_uint64(ctypes.addressof(meminfo)).value
@@ -185,6 +198,22 @@ def test_c_syscall_procfs_split_behavior() -> None:
     assert b"Pid:\t7" in status_text
     assert b"State:\tRunning" in status_text
     assert lib.qos_syscall_dispatch(SYSCALL_NR_CLOSE, fd_status, 0, 0, 0) == 0
+
+    runtime_map = ctypes.create_string_buffer(b"/proc/runtime/map")
+    p_runtime_map = ctypes.c_uint64(ctypes.addressof(runtime_map)).value
+    fd_runtime = lib.qos_syscall_dispatch(SYSCALL_NR_OPEN, p_runtime_map, 0, 0, 0)
+    assert fd_runtime >= 0
+    out_runtime = ctypes.create_string_buffer(256)
+    p_out_runtime = ctypes.c_uint64(ctypes.addressof(out_runtime)).value
+    r = lib.qos_syscall_dispatch(SYSCALL_NR_READ, fd_runtime, p_out_runtime, 256, 0)
+    assert r > 0
+    runtime_text = out_runtime.raw[:r]
+    assert b"CurrentPid:\t7" in runtime_text
+    assert b"CurrentProc:\tproc-7" in runtime_text
+    assert b"CurrentThread:\tnone" in runtime_text
+    assert b"Mappings:\t1" in runtime_text
+    assert b"Map0:\t0x0000000000004000->0x0000000000200000 f=0x3" in runtime_text
+    assert lib.qos_syscall_dispatch(SYSCALL_NR_CLOSE, fd_runtime, 0, 0, 0) == 0
 
     status_missing = ctypes.create_string_buffer(b"/proc/999/status")
     p_status_missing = ctypes.c_uint64(ctypes.addressof(status_missing)).value

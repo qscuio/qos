@@ -306,6 +306,50 @@ uint32_t qos_vmm_flags(uint64_t va) {
     return qos_vmm_flags_as(g_vmm_asid, va);
 }
 
+uint32_t qos_vmm_mapping_count_as(uint32_t asid) {
+    uint32_t i = 0;
+    uint32_t count = 0;
+    if (!asid_valid(asid)) {
+        return 0;
+    }
+    while (i < QOS_VMM_MAX_MAPPINGS) {
+        if (g_vused[asid][i] != 0) {
+            count++;
+        }
+        i++;
+    }
+    return count;
+}
+
+uint32_t qos_vmm_mapping_count(void) {
+    return qos_vmm_mapping_count_as(g_vmm_asid);
+}
+
+int qos_vmm_mapping_get_as(uint32_t asid, uint32_t ordinal, uint64_t *out_va, uint64_t *out_pa, uint32_t *out_flags) {
+    uint32_t i = 0;
+    uint32_t seen = 0;
+    if (!asid_valid(asid) || out_va == 0 || out_pa == 0 || out_flags == 0) {
+        return -1;
+    }
+    while (i < QOS_VMM_MAX_MAPPINGS) {
+        if (g_vused[asid][i] != 0) {
+            if (seen == ordinal) {
+                *out_va = g_vas[asid][i];
+                *out_pa = g_pas[asid][i];
+                *out_flags = g_vflags[asid][i];
+                return 0;
+            }
+            seen++;
+        }
+        i++;
+    }
+    return -1;
+}
+
+int qos_vmm_mapping_get(uint32_t ordinal, uint64_t *out_va, uint64_t *out_pa, uint32_t *out_flags) {
+    return qos_vmm_mapping_get_as(g_vmm_asid, ordinal, out_va, out_pa, out_flags);
+}
+
 void mm_init(void) {
     qos_kernel_state_mark(QOS_INIT_MM);
 }

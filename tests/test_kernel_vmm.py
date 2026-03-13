@@ -90,3 +90,42 @@ def test_c_vmm_remap_updates_translation() -> None:
     assert lib.qos_vmm_map(0x8000, 0x500000, VM_EXEC) == 0
     assert lib.qos_vmm_translate(0x8000) == 0x500000
     assert lib.qos_vmm_flags(0x8000) == VM_EXEC
+
+
+def test_c_vmm_runtime_mapping_snapshot_by_asid() -> None:
+    lib = ctypes.CDLL(str(_build_mm_lib()))
+    lib.qos_vmm_reset.argtypes = []
+    lib.qos_vmm_reset.restype = None
+    lib.qos_vmm_set_asid.argtypes = [ctypes.c_uint32]
+    lib.qos_vmm_set_asid.restype = None
+    lib.qos_vmm_map_as.argtypes = [ctypes.c_uint32, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint32]
+    lib.qos_vmm_map_as.restype = ctypes.c_int
+    lib.qos_vmm_mapping_count_as.argtypes = [ctypes.c_uint32]
+    lib.qos_vmm_mapping_count_as.restype = ctypes.c_uint32
+    lib.qos_vmm_mapping_get_as.argtypes = [
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.POINTER(ctypes.c_uint32),
+    ]
+    lib.qos_vmm_mapping_get_as.restype = ctypes.c_int
+
+    lib.qos_vmm_reset()
+    lib.qos_vmm_set_asid(7)
+    assert lib.qos_vmm_map_as(7, 0x4000, 0x200000, VM_READ | VM_WRITE) == 0
+    assert lib.qos_vmm_map_as(7, 0x8000, 0x210000, VM_READ) == 0
+    assert lib.qos_vmm_mapping_count_as(7) == 2
+
+    va = ctypes.c_uint64(0)
+    pa = ctypes.c_uint64(0)
+    flags = ctypes.c_uint32(0)
+    assert lib.qos_vmm_mapping_get_as(7, 0, ctypes.byref(va), ctypes.byref(pa), ctypes.byref(flags)) == 0
+    assert va.value == 0x4000
+    assert pa.value == 0x200000
+    assert flags.value == (VM_READ | VM_WRITE)
+
+    assert lib.qos_vmm_mapping_get_as(7, 1, ctypes.byref(va), ctypes.byref(pa), ctypes.byref(flags)) == 0
+    assert va.value == 0x8000
+    assert pa.value == 0x210000
+    assert flags.value == VM_READ
