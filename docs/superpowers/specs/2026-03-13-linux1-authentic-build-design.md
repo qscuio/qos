@@ -41,8 +41,11 @@ qos/
 ├── patches/
 │   ├── linux-1.0.0/                     # compatibility patch set for kernel build
 │   └── lilo/                            # compatibility patch set for lilo build/install
+├── manifests/
+│   └── linux1-sources.lock              # pinned URL + SHA256 for fetched artifacts
 ├── scripts/
 │   ├── fetch_linux1_sources.sh          # fetch pinned external sources + verify SHA256
+│   ├── verify_linux1_provenance.sh      # rebuild upstream+patches and compare to committed tree
 │   ├── build_linux1_kernel.sh           # build Linux 1.0.0 with compatibility flags/patches
 │   ├── build_linux1_userspace.sh        # build minimal static userspace
 │   ├── mk_linux1_disk.sh                # create partitioned disk, ext2 rootfs, install bootloader
@@ -65,6 +68,11 @@ External sources required for authentic boot flow (for example LILO source tarba
 - Fetch step fails hard on checksum mismatch.
 - Downloaded archives and extracted work directories are gitignored.
 - Kernel source remains committed in `linux-1.0.0/`.
+
+Provenance contract:
+- `linux-1.0.0/` is the canonical local learning tree.
+- `scripts/verify_linux1_provenance.sh` must reproduce a clean upstream extraction, apply the patch stack, and verify tree equivalence to committed `linux-1.0.0/` (ignoring generated files).
+- The verification command is part of CI for Linux1-related changes.
 
 ## Compatibility Patch Policy
 
@@ -94,6 +102,32 @@ Patch governance:
 
 Authentic boot requirement: no direct `qemu -kernel` in the primary smoke path.
 
+## Script Interfaces
+
+Each script has a strict interface so units are independently testable and composable.
+
+- `fetch_linux1_sources.sh`
+  - Inputs: `manifests/linux1-sources.lock`
+  - Outputs: verified archives under `build/linux1/sources/`
+  - Exit codes: non-zero on download/checksum/manifest parse failure
+- `build_linux1_kernel.sh`
+  - Inputs: `linux-1.0.0/` and optional `patches/linux-1.0.0/*.patch`
+  - Outputs: kernel image under `build/linux1/kernel/`
+  - Env: `LINUX1_JOBS` optional parallelism
+  - Exit codes: non-zero on patch or build failure
+- `build_linux1_userspace.sh`
+  - Inputs: `linux1-userspace/`
+  - Outputs: staged rootfs files under `build/linux1/rootfs/`
+  - Exit codes: non-zero on compile/link/staging failure
+- `mk_linux1_disk.sh`
+  - Inputs: built kernel + staged rootfs + fetched/built LILO artifacts
+  - Outputs: `build/linux1/images/linux1-disk.img`
+  - Exit codes: non-zero on partition/fs/bootloader install failure
+- `run_linux1_qemu.sh`
+  - Inputs: disk image path
+  - Outputs: serial log `build/linux1/logs/boot.log`
+  - Exit codes: non-zero on launch/timeout/marker failure
+
 ## Runtime Flow and Markers
 
 Expected runtime sequence:
@@ -109,6 +143,15 @@ Smoke assertions check textual markers from each layer:
 - bootloader marker (LILO banner or equivalent)
 - kernel boot marker
 - init/shell prompt marker
+
+Primary marker contract (exact strings):
+
+- bootloader marker: `LILO`
+- kernel marker: `Linux version 1.0.0`
+- init marker: `linux1-init: start`
+- shell prompt marker: `linux1-sh# `
+
+`run_linux1_qemu.sh` must capture serial output to `build/linux1/logs/boot.log`; tests read this log and assert markers in order.
 
 ## Makefile Integration
 
@@ -129,14 +172,33 @@ Add targets at repository root:
   - asserts kernel image exists
 - `test_linux1_disk_boot_lilo`
   - boots disk image via `qemu-system-i386 -hda`
-  - asserts bootloader output marker
+  - asserts `LILO` marker
 - `test_linux1_boot_to_init_shell`
-  - asserts kernel marker and prompt marker within timeout
+  - asserts `Linux version 1.0.0`, `linux1-init: start`, and `linux1-sh# ` within timeout
 
 Test harness behavior:
 - bounded timeout for boot tests
+- baseline timeout: 90 seconds, configurable by `LINUX1_BOOT_TIMEOUT_SEC`
 - merged stdout/stderr capture
 - full captured output included on assertion failure
+
+## Minimal Rootfs and Init Contract
+
+Minimum staged root filesystem contents:
+
+- `/sbin/init` (static i386 binary we build)
+- `/bin/sh` (static i386 binary we build)
+- `/bin/echo` (static i386 binary we build)
+- `/etc/inittab` (if used by init implementation)
+- `/dev/console` (char 5:1)
+- `/dev/null` (char 1:3)
+
+`/sbin/init` behavior contract:
+
+- write `linux1-init: start` to console
+- ensure stdio is bound to `/dev/console`
+- spawn `/bin/sh`
+- if shell exits, print `linux1-init: shell exited` and halt/reboot path is explicit
 
 ## Error Handling and Determinism
 
@@ -149,10 +211,13 @@ Test harness behavior:
 
 Baseline expected packages include:
 - `qemu-system-i386`
-- `gcc` / binutils toolchain with i386 support route chosen by implementation
+- `gcc-i686-linux-gnu`
+- `binutils-i686-linux-gnu`
+- `libc6-dev-i386-cross`
+- `make`, `bison`, `flex`, `perl`
 - ext2 and partition tooling (`e2fsprogs`, `fdisk`/`sfdisk`, loop-mount support)
 
-The implementation plan will pin exact package names and verify they work on the current Ubuntu host.
+Supported baseline host: Ubuntu 24.04 (including AArch64) using i386 cross toolchain packages above.
 
 ## Security and Safety Notes
 
@@ -160,11 +225,18 @@ The implementation plan will pin exact package names and verify they work on the
 - scripts should avoid privileged operations where possible
 - if loop devices or mount steps require elevated privileges, scripts must fail with explicit instructions
 
+Privilege model:
+
+- `fetch`, `build-kernel`, and `build-userspace` run unprivileged.
+- `mk_linux1_disk.sh` may require elevated privileges for loop-device setup, partition writes, and bootloader install.
+- `mk_linux1_disk.sh` must detect missing privileges early and emit a single actionable command path (for example rerun with `sudo`).
+
 ## Milestone Definition of Done
 
 Linux1 integration is done when all are true:
 
 - `linux-1.0.0/` exists in-repo and is buildable with documented compatibility patches.
+- provenance verification passes between committed kernel tree and upstream+patch reconstruction.
 - `make linux1` produces a bootable disk image.
 - `make test-linux1` passes locally and proves BIOS->MBR->LILO->kernel->init/prompt flow.
 - documentation explains fetch/build/run/clean workflow and patch policy.
