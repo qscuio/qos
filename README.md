@@ -156,6 +156,19 @@ Expected serial output includes:
 - `QOS kernel started impl=rust arch=aarch64`
 - `qos-sh:/>` prompt
 
+Bootstrap notes (AArch64 stage-1 stubs in both `tools/aarch64-c-probe/start.S`
+and `tools/aarch64-probe/src/main.rs`):
+
+- Enter at EL2 and drop to EL1 with `ERET` (sets `HCR_EL2`, `SPSR_EL2`, `ELR_EL2`).
+- If MMU is off, install a minimal identity map and enable MMU:
+  - `0x0000_0000..0x3FFF_FFFF`: device attributes (MMIO)
+  - `0x4000_0000..0x7FFF_FFFF`: normal cacheable memory (RAM/kernel image)
+- Export `__kernel_phys_start` / `__kernel_phys_end` from AArch64 linkers, and
+  reserve this physical range in Rust PMM initialization.
+
+Kernel placement is currently low-VA identity-mapped at `0x4008_0000` (not
+high-half linked yet).
+
 ### In-Guest Commands
 
 Current shell features are split by target:

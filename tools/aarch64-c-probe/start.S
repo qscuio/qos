@@ -18,6 +18,37 @@ _start:
     isb
     eret
 1:
+    mrs  x20, sctlr_el1
+    tbnz x20, #0, 2f
+
+    adrp x21, qos_l0_table
+    add  x21, x21, :lo12:qos_l0_table
+    adrp x22, qos_l1_table
+    add  x22, x22, :lo12:qos_l1_table
+
+    orr  x23, x22, #0x3
+    str  x23, [x21]
+    str  x23, [x21, #4088]
+
+    ldr  x24, =0x0060000000000401
+    str  x24, [x22]
+    ldr  x24, =0x0000000040000705
+    str  x24, [x22, #8]
+
+    ldr  x24, =0x000000000000ff00
+    msr  mair_el1, x24
+    msr  ttbr0_el1, x21
+    msr  ttbr1_el1, x21
+    ldr  x24, =0x00000005b5103510
+    msr  tcr_el1, x24
+    dsb  ish
+    isb
+
+    mrs  x24, sctlr_el1
+    orr  x24, x24, #(1 << 0)
+    msr  sctlr_el1, x24
+    isb
+2:
     mov  x0, x19
     adrp x1, QOS_STACK
     add  x1, x1, :lo12:QOS_STACK
@@ -25,6 +56,14 @@ _start:
     add  x1, x1, x2
     mov  sp, x1
     bl   c_main
-2:
+3:
     wfe
-    b    2b
+    b    3b
+
+.section .bss, "aw", %nobits
+.balign 4096
+qos_l0_table:
+    .space 4096
+.balign 4096
+qos_l1_table:
+    .space 4096

@@ -1011,6 +1011,38 @@ fn workqueue_state() -> &'static WorkqueueState {
     unsafe { &*WORKQUEUE.0.get() }
 }
 
+fn zero_struct<T>(value: &mut T) {
+    unsafe {
+        core::ptr::write_bytes(value as *mut T as *mut u8, 0, core::mem::size_of::<T>());
+    }
+}
+
+fn syscall_state_reset_in_place(state: &mut SyscallState) {
+    zero_struct(state);
+
+    let mut i = 0usize;
+    while i < QOS_FD_MAX {
+        state.fd_sock_conn_id[i] = -1;
+        state.fd_sock_pending_conn_id[i] = -1;
+        state.fd_file_id[i] = u16::MAX;
+        let mut j = 0usize;
+        while j < QOS_SOCK_PENDING_MAX {
+            state.fd_sock_pending_q_conn_id[i][j] = -1;
+            j += 1;
+        }
+        i += 1;
+    }
+
+    i = 0;
+    while i < QOS_SHLIB_MAX {
+        state.shlib_file_id[i] = u16::MAX;
+        i += 1;
+    }
+
+    state.shlib_next_handle = 1;
+    state.module_next_id = 1;
+}
+
 fn mm_lock() {
     while MM_LOCK
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -1415,6 +1447,24 @@ fn pmm_reserve_range(state: &mut PmmState, base: u64, length: u64) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+unsafe extern "C" {
+    static __kernel_phys_start: u8;
+    static __kernel_phys_end: u8;
+}
+
+#[cfg(target_arch = "aarch64")]
+fn pmm_reserve_kernel_image(state: &mut PmmState) {
+    let start = unsafe { &__kernel_phys_start as *const u8 as u64 };
+    let end = unsafe { &__kernel_phys_end as *const u8 as u64 };
+    if start != 0 && end > start {
+        pmm_reserve_range(state, start, end - start);
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn pmm_reserve_kernel_image(_state: &mut PmmState) {}
+
 pub fn pmm_init_from_boot_info(boot_info: &BootInfo) -> Result<(), KernelError> {
     if !boot_info_valid(boot_info) {
         return Err(KernelError::InvalidBootInfo);
@@ -1439,6 +1489,7 @@ pub fn pmm_init_from_boot_info(boot_info: &BootInfo) -> Result<(), KernelError> 
         }
 
         pmm_reserve_range(state, 0, 0x100000);
+        pmm_reserve_kernel_image(state);
         if boot_info.initramfs_size != 0 {
             pmm_reserve_range(state, boot_info.initramfs_addr, boot_info.initramfs_size);
         }
@@ -1977,7 +2028,7 @@ pub fn vfs_is_read_only(path: &str) -> Option<bool> {
 
 pub fn net_reset() {
     net_lock();
-    *net_state_mut() = NetState::new();
+    zero_struct(net_state_mut());
     net_unlock();
 }
 
@@ -3573,7 +3624,7 @@ pub fn drivers_nic_consume_rx(name: &str, consumed: u16) -> bool {
 
 pub fn syscall_reset() {
     syscall_lock();
-    *syscall_state_mut() = SyscallState::new();
+    syscall_state_reset_in_place(syscall_state_mut());
     syscall_unlock();
 }
 
@@ -6055,7 +6106,7 @@ fn proc_exec_image_clear_idx(state: &mut ProcState, idx: usize) {
 
 pub fn proc_reset() {
     proc_lock();
-    *proc_state_mut() = ProcState::new();
+    zero_struct(proc_state_mut());
     proc_unlock();
 }
 
