@@ -55,18 +55,18 @@ qos/
 │   ├── sh.c, ls.c, ...       # user program sources
 │   ├── bootasm.S, bootmain.c # bootloader
 │   ├── mkfs.c                # filesystem image builder
-│   ├── .gitignore            # ignores *.o, *.d, xv6.img, fs.img, etc.
+│   ├── .gitignore            # ignores build artifacts
 │   └── README                # updated with prerequisites and build instructions
 ├── scripts/
 │   └── build_xv6.sh          # thin wrapper: invokes make with cross-compiler flags
 ├── tests/
 │   └── test_xv6.py           # pytest: build check + boot smoke test
-└── Makefile                  # adds xv6, test-xv6, xv6-clean targets; extends test-all
+└── Makefile                  # xv6/xv6-clean/test-xv6 targets added; test-all/clean extended
 ```
 
 Build artifacts (`.o`, `.d`, `xv6.img`, `fs.img`, `bootblock`, `kernel`) are gitignored via
 `xv6/.gitignore`. There is no `xv6/build/` subdirectory — artifacts remain in `xv6/` root,
-matching upstream behaviour and avoiding non-trivial Makefile restructuring.
+matching upstream behaviour.
 
 ---
 
@@ -78,8 +78,8 @@ apt install gcc-i686-linux-gnu binutils-i686-linux-gnu qemu-system-x86
 
 Notes:
 - **`gcc-multilib` must NOT be listed** — it is not installable on AArch64.
-- `qemu-system-x86` provides `qemu-system-i386` (confirmed present at `/usr/bin/qemu-system-i386`
-  on this host).
+- `qemu-system-x86` provides `qemu-system-i386` (confirmed present at
+  `/usr/bin/qemu-system-i386` on this host via the `qemu-system-x86` package).
 - `gcc-i686-linux-gnu` provides the `i686-linux-gnu-gcc` cross-compiler.
 
 ---
@@ -88,17 +88,24 @@ Notes:
 
 ### `xv6/Makefile` Patches
 
-Two minimal patches to the upstream Makefile:
+The upstream Makefile auto-detects `TOOLPREFIX` by probing for `i386-jos-elf-gcc` or
+`i386-elf-gcc`. On this AArch64 host neither is present, so the auto-detection falls back to
+an empty prefix, causing the build to use the host `gcc` (AArch64). The patch overrides this.
 
-1. Set the default cross-compiler prefix:
-   ```makefile
-   TOOLPREFIX = i686-linux-gnu-
-   ```
+**Exact patch (unified diff):**
 
-2. Ensure `QEMU` points to the correct binary (upstream defaults to `qemu-system-i386`
-   which is correct; no change needed if already set).
+```diff
+--- a/xv6/Makefile
++++ b/xv6/Makefile
+@@ -1,5 +1,5 @@
+-TOOLPREFIX =
++TOOLPREFIX = i686-linux-gnu-
+```
 
-No other changes. The Makefile target used is `xv6.img` (upstream default).
+The upstream `QEMU` variable defaults to `qemu-system-i386`, which is correct. No change
+needed. No other Makefile changes are required.
+
+The Makefile target used by the build script is `xv6.img` (upstream default).
 
 ### `scripts/build_xv6.sh`
 
@@ -110,36 +117,57 @@ cd "$ROOT/xv6"
 make TOOLPREFIX=i686-linux-gnu- xv6.img
 ```
 
-The `ROOT` resolution uses `${BASH_SOURCE[0]}` (matching the convention in other scripts in
-`scripts/`), so the script works correctly regardless of the working directory from which it
-is invoked.
+`ROOT` resolution uses `${BASH_SOURCE[0]}`, matching the convention in other `scripts/` files,
+so the script works correctly regardless of the working directory from which it is invoked.
 
-### Root `Makefile` Additions
+### Root `Makefile` Changes
 
-```makefile
-.PHONY: xv6 xv6-clean test-xv6
+The existing `test-all` and `clean` targets are **edited in-place** (not duplicated). Duplicate
+targets in GNU Make silently drop the earlier recipe. New targets `xv6`, `xv6-clean`, and
+`test-xv6` are added. Parallel `make -j` is not supported — `test-xv6` has no declared
+dependency on `xv6` in the Makefile; the build is handled by the pytest fixture instead.
 
-xv6:
-	@bash scripts/build_xv6.sh
+**Diff against the existing root `Makefile`:**
 
-xv6-clean:
-	@$(MAKE) -C xv6 clean
+```diff
+--- a/Makefile
++++ b/Makefile
+@@ -1,6 +1,6 @@
+ ARCHES := x86_64 aarch64
+ ARCH_GOAL := $(firstword $(filter $(ARCHES),$(MAKECMDGOALS)))
 
-test-xv6:
-	@pytest tests/test_xv6.py -v
+-.PHONY: c rust test-all clean $(ARCHES)
++.PHONY: c rust test-all xv6 xv6-clean test-xv6 clean $(ARCHES)
 
-test-all:
-	@$(MAKE) -C c-os ARCH=x86_64 smoke
-	@$(MAKE) -C c-os ARCH=aarch64 smoke
-	@$(MAKE) -C rust-os ARCH=x86_64 smoke
-	@$(MAKE) -C rust-os ARCH=aarch64 smoke
-	@bash scripts/build_xv6.sh
-	@pytest tests/test_xv6.py -v
+ c:
+ 	@if [ -z "$(ARCH_GOAL)" ]; then \
+@@ -16,10 +16,16 @@ rust:
+ 	@$(MAKE) -C rust-os ARCH=$(ARCH_GOAL) build
 
-clean:
-	@$(MAKE) -C c-os clean
-	@$(MAKE) -C rust-os clean
-	@$(MAKE) -C xv6 clean
+ test-all:
+ 	@$(MAKE) -C c-os ARCH=x86_64 smoke
+ 	@$(MAKE) -C c-os ARCH=aarch64 smoke
+ 	@$(MAKE) -C rust-os ARCH=x86_64 smoke
+ 	@$(MAKE) -C rust-os ARCH=aarch64 smoke
++	@bash scripts/build_xv6.sh
++	@pytest tests/test_xv6.py -v
+
++xv6:
++	@bash scripts/build_xv6.sh
++
++xv6-clean:
++	@$(MAKE) -C xv6 clean
++
++test-xv6:
++	@pytest tests/test_xv6.py -v
++
+ clean:
+ 	@$(MAKE) -C c-os clean
+ 	@$(MAKE) -C rust-os clean
++	@$(MAKE) -C xv6 clean
+
+ $(ARCHES):
+ 	@:
 ```
 
 ---
@@ -148,111 +176,104 @@ clean:
 
 Two pytest test cases following the style of existing `test_qemu_*.py` tests.
 
+### `ROOT` convention
+
+Matches the existing pattern used throughout `tests/`:
+
+```python
+ROOT = Path(__file__).resolve().parents[1]
+```
+
 ### Module-level build fixture
 
-Both tests require `xv6.img` to exist. A module-scoped `autouse` fixture ensures the image is
-built before any test runs:
+A module-scoped `autouse` fixture builds `xv6.img` before any test in this file runs.
+This means `pytest tests/test_xv6.py` works standalone without a prior `make xv6`.
+
+The fixture combines stdout and stderr in the failure message so all compiler errors are
+visible. A 5-minute timeout guards against a hung build.
+
+### Boot smoke test I/O
+
+`proc.communicate(timeout=30)` is used for QEMU output collection. This is simpler and
+correct for a smoke test: QEMU produces a burst of output while booting, then stalls at the
+shell prompt. `communicate()` will block until QEMU exits (it won't for a live process), but
+the `timeout=30` causes it to raise `subprocess.TimeoutExpired` which is caught and inspected.
+At that point the buffered output is checked for the shell prompt — a timeout during
+`communicate()` on a live QEMU process is the *expected* success path (QEMU is still running
+at the prompt).
+
+### Complete `tests/test_xv6.py`
 
 ```python
-@pytest.fixture(scope="module", autouse=True)
-def build_xv6(tmp_path_factory):
-    result = subprocess.run(
-        ["bash", "scripts/build_xv6.sh"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stderr.decode()
-```
-
-This means `pytest tests/test_xv6.py` always works standalone — no prior `make xv6` required.
-
-### Test 1: Build Check
-
-Verifies the image was produced by the fixture:
-
-```python
-def test_xv6_build():
-    assert (REPO_ROOT / "xv6" / "xv6.img").exists()
-```
-
-### Test 2: Boot Smoke Test
-
-Launches `qemu-system-i386` and reads serial output until the xv6 shell prompt (`$ `) appears
-or a 30-second timeout expires.
-
-**I/O handling:** Uses `proc.stdout.read1(256)` (available on `BufferedReader`) which returns
-as soon as any bytes are available without blocking until the buffer fills. This avoids the
-blocking `read(256)` pitfall on a live process.
-
-```python
-import subprocess, time
+import subprocess
+import time
 from pathlib import Path
-from subprocess import PIPE, STDOUT
+
 import pytest
 
-REPO_ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).resolve().parents[1]
+XV6_IMG = ROOT / "xv6" / "xv6.img"
+
 
 @pytest.fixture(scope="module", autouse=True)
 def build_xv6():
     result = subprocess.run(
         ["bash", "scripts/build_xv6.sh"],
-        cwd=REPO_ROOT,
-        capture_output=True,
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=300,
     )
-    assert result.returncode == 0, result.stderr.decode()
+    assert result.returncode == 0, (
+        f"xv6 build failed:\n{result.stdout.decode(errors='replace')}"
+    )
+
 
 def test_xv6_build():
-    assert (REPO_ROOT / "xv6" / "xv6.img").exists()
+    assert XV6_IMG.exists(), f"xv6.img not found at {XV6_IMG}"
+
 
 def test_xv6_boot_smoke():
-    img = REPO_ROOT / "xv6" / "xv6.img"
     proc = subprocess.Popen(
         [
             "qemu-system-i386",
             "-nographic",
-            "-drive", f"file={img},index=0,media=disk,format=raw",
+            "-serial", "stdio",
+            "-drive", f"file={XV6_IMG},index=0,media=disk,format=raw",
         ],
-        stdout=PIPE,
-        stderr=STDOUT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
     try:
-        deadline = time.time() + 30
-        buf = b""
-        while time.time() < deadline:
-            # read1 returns as soon as any bytes are available (non-blocking wrt buffer)
-            chunk = proc.stdout.read1(256)
-            if chunk:
-                buf += chunk
-                if b"$ " in buf:
-                    return  # success
-            elif proc.poll() is not None:
-                # QEMU exited before prompt
-                break
-        rc = proc.poll()
-        if rc is not None and rc != 0:
-            pytest.fail(
-                f"qemu-system-i386 exited with code {rc} before shell prompt.\n"
-                f"Output:\n{buf.decode(errors='replace')}"
-            )
-        else:
-            pytest.fail(
-                f"xv6 shell prompt ('$ ') not found within 30s.\n"
-                f"Output:\n{buf.decode(errors='replace')}"
-            )
-    finally:
+        out, _ = proc.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        # Expected: QEMU is still running at the shell prompt.
+        # Kill it and read whatever was buffered.
         proc.kill()
-        proc.wait()
+        out, _ = proc.communicate()
+
+    text = out.decode(errors="replace")
+    assert "$ " in text, (
+        f"xv6 shell prompt ('$ ') not found in QEMU output.\n"
+        f"Output:\n{text}"
+    )
 ```
+
+**Why `-serial stdio`:** xv6's kernel writes boot messages and the shell prompt to the serial
+port (COM1). `-nographic` alone routes VGA and serial to stdio on modern QEMU, but explicitly
+passing `-serial stdio` is consistent with xv6's own `qemu-nox` Makefile target and removes
+ambiguity.
 
 ---
 
 ## `xv6/.gitignore`
 
 ```
+# Build artifacts (generated by make)
 *.o
 *.d
-*.asm
-*.sym
+*.asm       # disassembly output, not source files
+*.sym       # symbol table output, not source files
 bootblock
 entryother
 initcode
@@ -266,7 +287,7 @@ mkfs
 
 ## README Updates
 
-`xv6/README` gains a section at the top:
+`xv6/README` gains a section at the top (before the existing content):
 
 ```
 == Building in the QOS monorepo ==
@@ -275,9 +296,11 @@ Prerequisites (AArch64 Ubuntu host):
   apt install gcc-i686-linux-gnu binutils-i686-linux-gnu qemu-system-x86
 
 Build:
-  make xv6            # from repo root
+  make xv6            # from repo root — builds xv6.img
   make test-xv6       # build + boot smoke test
-  make xv6-clean      # remove artifacts
+  make xv6-clean      # remove build artifacts
 ```
 
-The top-level `README.md` gains a brief `xv6` entry in the project overview table.
+The top-level `README.md` gains an `xv6` row in whatever project overview section lists
+`c-os` and `rust-os`, with the description: "xv6-x86 (MIT teaching OS, i386, reference
+bootable OS)".
