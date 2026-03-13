@@ -6,7 +6,7 @@ use core::cmp::min;
 use core::panic::PanicInfo;
 use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 use core::sync::atomic::{fence, Ordering};
-use qos_boot::boot_info::{BootInfo, MmapEntry, QOS_BOOT_MAGIC};
+use qos_boot::boot_info::{BootInfo, MmapEntry, QOS_BOOT_MAGIC, QOS_MMAP_MAX_ENTRIES};
 use qos_kernel::{
     kernel_entry, net_icmp_echo, proc_create, proc_fork, sched_add_task, sched_next, softirq_run,
     syscall_dispatch, vmm_map_as, vmm_set_asid, workqueue_completed_count, workqueue_enqueue,
@@ -23,6 +23,8 @@ const UART0: *mut u32 = 0x0900_0000 as *mut u32;
 const UART_FR: *const u32 = 0x0900_0018 as *const u32;
 const UART_FR_RXFE: u32 = 0x10;
 const QOS_DTB_MAGIC: u32 = 0xEDFE0DD0;
+const QOS_MMAP_TYPE_USABLE: u32 = 1;
+const QOS_MMAP_TYPE_RESERVED: u32 = 2;
 
 const VIRTIO_MMIO_BASE_START: usize = 0x0A00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -198,6 +200,11 @@ static mut QOS_FAKE_DTB: FakeDtb = FakeDtb {
 #[no_mangle]
 static mut QOS_FAKE_DTB_READY: bool = false;
 
+unsafe extern "C" {
+    static __kernel_phys_start: u8;
+    static __kernel_phys_end: u8;
+}
+
 global_asm!(
     r#"
     .section .text._start,"ax"
@@ -220,6 +227,11 @@ _start:
     isb
     eret
 1:
+    mrs x20, cpacr_el1
+    orr x20, x20, #(3 << 20)
+    msr cpacr_el1, x20
+    isb
+
     mrs x20, sctlr_el1
     tbnz x20, #0, 2f
 
@@ -1375,6 +1387,7 @@ struct DtbBootExtract {
     initramfs_from_dtb: bool,
     initramfs_addr: u64,
     initramfs_size: u64,
+    dtb_size: u64,
 }
 
 impl DtbBootExtract {
@@ -1386,6 +1399,7 @@ impl DtbBootExtract {
             initramfs_from_dtb: false,
             initramfs_addr: 0,
             initramfs_size: 0,
+            dtb_size: 0,
         }
     }
 }
@@ -1538,6 +1552,7 @@ fn dtb_extract_boot_info(dtb_addr: u64) -> DtbBootExtract {
     let mut initrd_end = 0u64;
     let mut have_initrd_start = false;
     let mut have_initrd_end = false;
+    out.dtb_size = total_size as u64;
 
     let mut pos = off_struct;
     while pos + 4 <= struct_end {
@@ -1692,6 +1707,24 @@ fn locate_dtb_and_extract(initial_dtb: u64) -> (u64, DtbBootExtract) {
     } else {
         (0, DtbBootExtract::empty())
     }
+}
+
+fn boot_info_push_mmap(info: &mut BootInfo, base: u64, length: u64, type_: u32) -> bool {
+    if length == 0 || type_ == 0 {
+        return false;
+    }
+    let idx = info.mmap_entry_count as usize;
+    if idx >= QOS_MMAP_MAX_ENTRIES {
+        return false;
+    }
+    info.mmap_entries[idx] = MmapEntry {
+        base,
+        length,
+        type_,
+        _pad: 0,
+    };
+    info.mmap_entry_count += 1;
+    true
 }
 
 fn emit_boot_marker_prefix(
@@ -2352,23 +2385,13 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
     } else {
         dtb_extract_boot_info(effective_dtb)
     };
-    if dtb_extract.mmap_from_dtb {
-        info.mmap_entry_count = 1;
-        info.mmap_entries[0] = MmapEntry {
-            base: dtb_extract.mem_base,
-            length: dtb_extract.mem_size,
-            type_: 1,
-            _pad: 0,
-        };
+    let (usable_base, usable_len) = if dtb_extract.mmap_from_dtb {
+        (dtb_extract.mem_base, dtb_extract.mem_size)
     } else {
-        info.mmap_entry_count = 1;
-        info.mmap_entries[0] = MmapEntry {
-            base: 0x4000_0000,
-            length: 0x0400_0000,
-            type_: 1,
-            _pad: 0,
-        };
-    }
+        (0x4000_0000, 0x0400_0000)
+    };
+    info.mmap_entry_count = 0;
+    let _ = boot_info_push_mmap(&mut info, usable_base, usable_len, QOS_MMAP_TYPE_USABLE);
     if dtb_extract.initramfs_from_dtb {
         info.initramfs_addr = dtb_extract.initramfs_addr;
         info.initramfs_size = dtb_extract.initramfs_size;
@@ -2377,6 +2400,35 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
         info.initramfs_size = 0x1000;
     }
     info.dtb_addr = effective_dtb;
+    let kernel_start = unsafe { &__kernel_phys_start as *const u8 as u64 };
+    let kernel_end = unsafe { &__kernel_phys_end as *const u8 as u64 };
+    if kernel_end > kernel_start {
+        let _ = boot_info_push_mmap(
+            &mut info,
+            kernel_start,
+            kernel_end - kernel_start,
+            QOS_MMAP_TYPE_RESERVED,
+        );
+    }
+    if info.initramfs_size != 0 {
+        let initramfs_addr = info.initramfs_addr;
+        let initramfs_size = info.initramfs_size;
+        let _ = boot_info_push_mmap(
+            &mut info,
+            initramfs_addr,
+            initramfs_size,
+            QOS_MMAP_TYPE_RESERVED,
+        );
+    }
+    let dtb_size = if dtb_extract.dtb_size != 0 {
+        dtb_extract.dtb_size
+    } else {
+        FAKE_DTB_TOTAL_SIZE as u64
+    };
+    if info.dtb_addr != 0 && dtb_size != 0 {
+        let dtb_addr = info.dtb_addr;
+        let _ = boot_info_push_mmap(&mut info, dtb_addr, dtb_size, QOS_MMAP_TYPE_RESERVED);
+    }
 
     let mmap_source = if dtb_extract.mmap_from_dtb {
         "dtb"

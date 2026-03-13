@@ -69,7 +69,7 @@ def test_smoke_logs_include_stage_and_handoff_markers() -> None:
             "dtb_addr_nonzero=1",
             "dtb_magic=ok",
             "mmap_source=dtb",
-            "mmap_count=1",
+            "mmap_count=",
             "mmap_len_nonzero=1",
             "initramfs_source=dtb",
             "initramfs_size_nonzero=1",
@@ -83,7 +83,7 @@ def test_smoke_logs_include_stage_and_handoff_markers() -> None:
             "dtb_addr_nonzero=1",
             "dtb_magic=ok",
             "mmap_source=dtb",
-            "mmap_count=1",
+            "mmap_count=",
             "mmap_len_nonzero=1",
             "initramfs_source=dtb",
             "initramfs_size_nonzero=1",
@@ -105,3 +105,8 @@ def test_smoke_logs_include_stage_and_handoff_markers() -> None:
             assert count > 0, f"expected mmap_count > 0 in {log}, got {count}\n{text}"
             disk_match = re.search(r"disk_load=(lba_ext|chs)", text)
             assert disk_match, f"missing disk_load marker in {log}\n{text}"
+        if arch == "aarch64":
+            match = re.search(r"mmap_count=([0-9]+)", text)
+            assert match, f"missing decimal mmap_count in {log}\n{text}"
+            count = int(match.group(1))
+            assert count >= 3, f"expected mmap_count >= 3 in {log}, got {count}\n{text}"

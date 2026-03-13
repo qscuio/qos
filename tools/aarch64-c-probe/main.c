@@ -24,6 +24,8 @@
 #define QOS_INIT_PID 1u
 #define QOS_SHELL_PID 2u
 #define QOS_DTB_MAGIC 0xEDFE0DD0u
+#define QOS_MMAP_TYPE_USABLE 1u
+#define QOS_MMAP_TYPE_RESERVED 2u
 #define FDT_MAGIC_BE 0xD00DFEEDu
 #define FDT_BEGIN_NODE 1u
 #define FDT_END_NODE 2u
@@ -280,6 +282,9 @@ void *memmove(void *dst, const void *src, size_t n) {
 
 unsigned char QOS_STACK[65536];
 
+extern uint8_t __kernel_phys_start __attribute__((weak));
+extern uint8_t __kernel_phys_end __attribute__((weak));
+
 typedef struct __attribute__((aligned(8))) {
     uint8_t blob[FAKE_DTB_TOTAL_SIZE];
 } fake_dtb_t;
@@ -291,6 +296,7 @@ typedef struct {
     int initramfs_from_dtb;
     uint64_t initramfs_addr;
     uint64_t initramfs_size;
+    uint64_t dtb_size;
 } dtb_boot_extract_t;
 
 static fake_dtb_t QOS_FAKE_DTB = {{0}};
@@ -1664,6 +1670,7 @@ static void dtb_extract_boot_info(uint64_t dtb_addr, dtb_boot_extract_t *out) {
     if (total_size < 40u || total_size > DTB_MAX_TOTAL_SIZE) {
         return;
     }
+    out->dtb_size = (uint64_t)total_size;
 
     if (dtb_be32_at(blob, total_size, 8u, &u32) != 0) {
         return;
@@ -1867,6 +1874,23 @@ static void emit_boot_marker_prefix(const char *mmap_source, uint32_t mmap_count
     uart_puts(" initramfs_size_nonzero=");
     uart_put_u32((uint32_t)(initramfs_size_nonzero != 0 ? 1u : 0u));
     uart_puts(" el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb ");
+}
+
+static int boot_info_push_mmap(boot_info_t *info, uint64_t base, uint64_t length, uint32_t type) {
+    uint32_t idx = 0;
+    if (info == 0 || length == 0 || type == 0) {
+        return 0;
+    }
+    idx = info->mmap_entry_count;
+    if (idx >= QOS_MMAP_MAX_ENTRIES) {
+        return 0;
+    }
+    info->mmap_entries[idx].base = base;
+    info->mmap_entries[idx].length = length;
+    info->mmap_entries[idx].type = type;
+    info->mmap_entries[idx]._pad = 0;
+    info->mmap_entry_count = idx + 1u;
+    return 1;
 }
 
 static uint32_t mmio_read32(uintptr_t base, uintptr_t off) {
@@ -2513,6 +2537,11 @@ void c_main(uint64_t dtb_addr) {
     int icmp_ok = 0;
     int net_tx_ok = 0;
     int net_rx_ok = 0;
+    uint64_t usable_base = 0;
+    uint64_t usable_len = 0;
+    uint64_t kernel_start = 0;
+    uint64_t kernel_end = 0;
+    uint64_t dtb_size = 0;
     dtb_boot_extract_t input_extract = {0};
     dtb_boot_extract_t dtb_extract = {0};
     const char *mmap_source = "dtb_stub";
@@ -2538,18 +2567,17 @@ void c_main(uint64_t dtb_addr) {
     } else {
         dtb_extract_boot_info(effective_dtb, &dtb_extract);
     }
-    info.mmap_entry_count = 1u;
     if (dtb_extract.mmap_from_dtb) {
-        info.mmap_entries[0].base = dtb_extract.mem_base;
-        info.mmap_entries[0].length = dtb_extract.mem_size;
-        info.mmap_entries[0].type = 1u;
+        usable_base = dtb_extract.mem_base;
+        usable_len = dtb_extract.mem_size;
         mmap_source = "dtb";
     } else {
-        info.mmap_entries[0].base = 0x40000000ULL;
-        info.mmap_entries[0].length = 0x04000000ULL;
-        info.mmap_entries[0].type = 1u;
+        usable_base = 0x40000000ULL;
+        usable_len = 0x04000000ULL;
         mmap_source = "dtb_stub";
     }
+    info.mmap_entry_count = 0u;
+    (void)boot_info_push_mmap(&info, usable_base, usable_len, QOS_MMAP_TYPE_USABLE);
     if (dtb_extract.initramfs_from_dtb) {
         info.initramfs_addr = dtb_extract.initramfs_addr;
         info.initramfs_size = dtb_extract.initramfs_size;
@@ -2560,6 +2588,22 @@ void c_main(uint64_t dtb_addr) {
         initramfs_source = "stub";
     }
     info.dtb_addr = effective_dtb;
+    kernel_start = (uint64_t)(uintptr_t)&__kernel_phys_start;
+    kernel_end = (uint64_t)(uintptr_t)&__kernel_phys_end;
+    if (kernel_start != 0u && kernel_end > kernel_start) {
+        (void)boot_info_push_mmap(&info, kernel_start, kernel_end - kernel_start, QOS_MMAP_TYPE_RESERVED);
+    }
+    if (info.initramfs_size != 0u) {
+        (void)boot_info_push_mmap(&info, info.initramfs_addr, info.initramfs_size, QOS_MMAP_TYPE_RESERVED);
+    }
+    if (dtb_extract.dtb_size != 0u) {
+        dtb_size = dtb_extract.dtb_size;
+    } else {
+        dtb_size = (uint64_t)FAKE_DTB_TOTAL_SIZE;
+    }
+    if (info.dtb_addr != 0u && dtb_size != 0u) {
+        (void)boot_info_push_mmap(&info, info.dtb_addr, dtb_size, QOS_MMAP_TYPE_RESERVED);
+    }
 
     kernel_ok = qos_kernel_entry(&info) == 0;
     if (kernel_ok) {

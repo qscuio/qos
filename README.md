@@ -169,6 +169,9 @@ and `tools/aarch64-probe/src/main.rs`):
     at `0xFFFF_FFFF_8000_0000` -> PA `0x4000_0000`
 - Export `__kernel_phys_start` / `__kernel_phys_end` from AArch64 linkers, and
   reserve this physical range in Rust PMM initialization.
+- AArch64 probe boot-info now publishes multiple mmap entries:
+  - entry 0: usable RAM region (from DTB `/memory` or deterministic stub)
+  - additional reserved entries: kernel image, initramfs, DTB blob
 
 Kernel placement is currently low-VA identity-mapped at `0x4008_0000` (not
 high-half linked yet).

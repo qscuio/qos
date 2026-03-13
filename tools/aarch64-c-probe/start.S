@@ -18,6 +18,11 @@ _start:
     isb
     eret
 1:
+    mrs  x20, cpacr_el1
+    orr  x20, x20, #(3 << 20)
+    msr  cpacr_el1, x20
+    isb
+
     mrs  x20, sctlr_el1
     tbnz x20, #0, 2f
 
