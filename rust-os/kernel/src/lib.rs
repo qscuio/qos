@@ -1447,13 +1447,13 @@ fn pmm_reserve_range(state: &mut PmmState, base: u64, length: u64) {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_os = "none"))]
 unsafe extern "C" {
     static __kernel_phys_start: u8;
     static __kernel_phys_end: u8;
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_os = "none"))]
 fn pmm_reserve_kernel_image(state: &mut PmmState) {
     let start = unsafe { &__kernel_phys_start as *const u8 as u64 };
     let end = unsafe { &__kernel_phys_end as *const u8 as u64 };
@@ -1462,7 +1462,7 @@ fn pmm_reserve_kernel_image(state: &mut PmmState) {
     }
 }
 
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
 fn pmm_reserve_kernel_image(_state: &mut PmmState) {}
 
 pub fn pmm_init_from_boot_info(boot_info: &BootInfo) -> Result<(), KernelError> {

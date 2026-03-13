@@ -2117,8 +2117,8 @@ fn virtio_net_probe() -> (bool, bool, bool) {
             core::mem::size_of::<LegacyQueuePage>(),
         );
     }
-    let rx_page = unsafe { virt_to_phys(addr_of!(LEGACY_RX_QUEUE_PAGE.0) as u64) };
-    let tx_page = unsafe { virt_to_phys(addr_of!(LEGACY_TX_QUEUE_PAGE.0) as u64) };
+    let rx_page = unsafe { virt_to_phys(addr_of_mut!(LEGACY_RX_QUEUE_PAGE.0) as *mut u8 as u64) };
+    let tx_page = unsafe { virt_to_phys(addr_of_mut!(LEGACY_TX_QUEUE_PAGE.0) as *mut u8 as u64) };
 
     let rx = match virtio_net_init_queue_legacy(base, VIRTIO_NET_QUEUE_RX, rx_page) {
         Some(v) => v,
@@ -2159,7 +2159,7 @@ fn virtio_net_probe() -> (bool, bool, bool) {
         write_volatile(
             rx.desc,
             VirtqDesc {
-                addr: virt_to_phys(addr_of!(LEGACY_RX_FRAME_BUF) as u64),
+                addr: virt_to_phys(addr_of_mut!(LEGACY_RX_FRAME_BUF) as *mut u8 as u64),
                 len: RX_BUF_LEN as u32,
                 flags: VIRTQ_DESC_F_WRITE,
                 next: 0,
@@ -2183,7 +2183,7 @@ fn virtio_net_probe() -> (bool, bool, bool) {
         write_volatile(
             tx.desc,
             VirtqDesc {
-                addr: virt_to_phys(addr_of!(LEGACY_TX_FRAME_BUF) as u64),
+                addr: virt_to_phys(addr_of_mut!(LEGACY_TX_FRAME_BUF) as *mut u8 as u64),
                 len: tx_len,
                 flags: 0,
                 next: 0,
@@ -2232,7 +2232,7 @@ fn virtio_net_probe() -> (bool, bool, bool) {
         write_volatile(
             tx.desc,
             VirtqDesc {
-                addr: virt_to_phys(addr_of!(LEGACY_TX_FRAME_BUF) as u64),
+                addr: virt_to_phys(addr_of_mut!(LEGACY_TX_FRAME_BUF) as *mut u8 as u64),
                 len: icmp_tx_len,
                 flags: 0,
                 next: 0,
@@ -2315,66 +2315,63 @@ static mut NET_TX_VIRTIO_VERSION: u32 = 0;
 #[no_mangle]
 static mut ICMP_REAL_STAGE: u32 = ICMP_REAL_STAGE_QUEUE;
 
-fn net_tx_stage_text() -> &'static str {
-    let stage = unsafe { NET_TX_STAGE };
-    match stage {
-        NET_TX_STAGE_OK => "ok",
-        NET_TX_STAGE_NO_NETDEV => "no_netdev",
-        NET_TX_STAGE_FEATURES => "features",
-        NET_TX_STAGE_QUEUE => "queue",
-        NET_TX_STAGE_TIMEOUT => "timeout",
-        _ => "unknown",
+fn uart_put_net_tx_stage() {
+    match unsafe { NET_TX_STAGE } {
+        NET_TX_STAGE_OK => uart_puts("ok"),
+        NET_TX_STAGE_NO_NETDEV => uart_puts("no_netdev"),
+        NET_TX_STAGE_FEATURES => uart_puts("features"),
+        NET_TX_STAGE_QUEUE => uart_puts("queue"),
+        NET_TX_STAGE_TIMEOUT => uart_puts("timeout"),
+        _ => uart_puts("unknown"),
     }
 }
 
-fn net_rx_stage_text() -> &'static str {
-    let stage = unsafe { NET_RX_STAGE };
-    match stage {
-        NET_RX_STAGE_OK => "ok",
-        NET_RX_STAGE_NO_NETDEV => "no_netdev",
-        NET_RX_STAGE_FEATURES => "features",
-        NET_RX_STAGE_QUEUE => "queue",
-        NET_RX_STAGE_TIMEOUT => "timeout",
-        NET_RX_STAGE_PAYLOAD => "payload",
-        _ => "unknown",
-    }
-}
-
-fn net_tx_version_text() -> &'static str {
+fn uart_put_net_tx_version() {
     match unsafe { NET_TX_VIRTIO_VERSION } {
-        1 => "v1",
-        2 => "v2",
-        0 => "v0",
-        _ => "v?",
+        1 => uart_puts("v1"),
+        2 => uart_puts("v2"),
+        0 => uart_puts("v0"),
+        _ => uart_puts("v?"),
     }
 }
 
-fn net_rx_result_text() -> &'static str {
+fn uart_put_net_rx_result() {
     match unsafe { NET_RX_STAGE } {
-        NET_RX_STAGE_OK => "real_ok",
-        NET_RX_STAGE_PAYLOAD => "real_ok",
-        NET_RX_STAGE_TIMEOUT => "real_skip",
-        _ => "real_fail",
+        NET_RX_STAGE_OK | NET_RX_STAGE_PAYLOAD => uart_puts("real_ok"),
+        NET_RX_STAGE_TIMEOUT => uart_puts("real_skip"),
+        _ => uart_puts("real_fail"),
     }
 }
 
-fn icmp_real_stage_text() -> &'static str {
-    match unsafe { ICMP_REAL_STAGE } {
-        ICMP_REAL_STAGE_OK => "ok",
-        ICMP_REAL_STAGE_NO_NETDEV => "no_netdev",
-        ICMP_REAL_STAGE_FEATURES => "features",
-        ICMP_REAL_STAGE_QUEUE => "queue",
-        ICMP_REAL_STAGE_TIMEOUT => "timeout",
-        ICMP_REAL_STAGE_TX => "tx",
-        _ => "unknown",
+fn uart_put_net_rx_stage() {
+    match unsafe { NET_RX_STAGE } {
+        NET_RX_STAGE_OK => uart_puts("ok"),
+        NET_RX_STAGE_NO_NETDEV => uart_puts("no_netdev"),
+        NET_RX_STAGE_FEATURES => uart_puts("features"),
+        NET_RX_STAGE_QUEUE => uart_puts("queue"),
+        NET_RX_STAGE_TIMEOUT => uart_puts("timeout"),
+        NET_RX_STAGE_PAYLOAD => uart_puts("payload"),
+        _ => uart_puts("unknown"),
     }
 }
 
-fn icmp_real_result_text() -> &'static str {
+fn uart_put_icmp_real_stage() {
     match unsafe { ICMP_REAL_STAGE } {
-        ICMP_REAL_STAGE_OK => "roundtrip_ok",
-        ICMP_REAL_STAGE_TIMEOUT => "roundtrip_skip",
-        _ => "roundtrip_fail",
+        ICMP_REAL_STAGE_OK => uart_puts("ok"),
+        ICMP_REAL_STAGE_NO_NETDEV => uart_puts("no_netdev"),
+        ICMP_REAL_STAGE_FEATURES => uart_puts("features"),
+        ICMP_REAL_STAGE_QUEUE => uart_puts("queue"),
+        ICMP_REAL_STAGE_TIMEOUT => uart_puts("timeout"),
+        ICMP_REAL_STAGE_TX => uart_puts("tx"),
+        _ => uart_puts("unknown"),
+    }
+}
+
+fn uart_put_icmp_real_result() {
+    match unsafe { ICMP_REAL_STAGE } {
+        ICMP_REAL_STAGE_OK => uart_puts("roundtrip_ok"),
+        ICMP_REAL_STAGE_TIMEOUT => uart_puts("roundtrip_skip"),
+        _ => uart_puts("roundtrip_fail"),
     }
 }
 
@@ -2476,13 +2473,13 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
                 initramfs_size_nonzero,
             );
             uart_puts("icmp_echo=gateway_ok net_tx=real_ok net_tx_stage=ok net_rx=");
-            uart_puts(net_rx_result_text());
+            uart_put_net_rx_result();
             uart_puts(" net_rx_stage=");
-            uart_puts(net_rx_stage_text());
+            uart_put_net_rx_stage();
             uart_puts(" icmp_real=");
-            uart_puts(icmp_real_result_text());
+            uart_put_icmp_real_result();
             uart_puts(" icmp_real_stage=");
-            uart_puts(icmp_real_stage_text());
+            uart_put_icmp_real_stage();
             uart_puts("\n");
         } else {
             emit_boot_marker_prefix(
@@ -2493,32 +2490,32 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
                 initramfs_size_nonzero,
             );
             uart_puts("icmp_echo=gateway_ok net_tx=real_fail net_tx_stage=");
-            uart_puts(net_tx_stage_text());
+            uart_put_net_tx_stage();
             uart_puts(" net_tx_ver=");
-            uart_puts(net_tx_version_text());
+            uart_put_net_tx_version();
             uart_puts(" net_rx=");
-            uart_puts(net_rx_result_text());
+            uart_put_net_rx_result();
             uart_puts(" net_rx_stage=");
-            uart_puts(net_rx_stage_text());
+            uart_put_net_rx_stage();
             uart_puts(" icmp_real=");
-            uart_puts(icmp_real_result_text());
+            uart_put_icmp_real_result();
             uart_puts(" icmp_real_stage=");
-            uart_puts(icmp_real_stage_text());
+            uart_put_icmp_real_stage();
             uart_puts("\n");
         }
     } else {
         uart_puts("QOS kernel started impl=rust arch=aarch64 handoff=invalid entry=kernel_main abi=x0 dtb_addr_nonzero=0 dtb_magic=bad mmap_source=dtb_stub mmap_count=0 mmap_len_nonzero=0 initramfs_source=stub initramfs_size_nonzero=0 el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb icmp_echo=gateway_fail net_tx=real_fail net_tx_stage=");
-        uart_puts(net_tx_stage_text());
+        uart_put_net_tx_stage();
         uart_puts(" net_tx_ver=");
-        uart_puts(net_tx_version_text());
+        uart_put_net_tx_version();
         uart_puts(" net_rx=");
-        uart_puts(net_rx_result_text());
+        uart_put_net_rx_result();
         uart_puts(" net_rx_stage=");
-        uart_puts(net_rx_stage_text());
+        uart_put_net_rx_stage();
         uart_puts(" icmp_real=");
-        uart_puts(icmp_real_result_text());
+        uart_put_icmp_real_result();
         uart_puts(" icmp_real_stage=");
-        uart_puts(icmp_real_stage_text());
+        uart_put_icmp_real_stage();
         uart_puts("\n");
     }
 
