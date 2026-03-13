@@ -61,6 +61,10 @@ _start:
     orr  x24, x24, #(1 << 0)
     msr  sctlr_el1, x24
     isb
+    ldr  x24, =0xFFFFFFFF40000000
+    adr  x25, 2f
+    add  x25, x25, x24
+    br   x25
 2:
     mov  x0, x19
     adrp x1, QOS_STACK

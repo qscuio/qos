@@ -25,6 +25,9 @@ const UART_FR_RXFE: u32 = 0x10;
 const QOS_DTB_MAGIC: u32 = 0xEDFE0DD0;
 const QOS_MMAP_TYPE_USABLE: u32 = 1;
 const QOS_MMAP_TYPE_RESERVED: u32 = 2;
+const QOS_HIGH_ALIAS_BASE: u64 = 0xFFFF_FFFF_8000_0000;
+const QOS_HIGH_ALIAS_END: u64 = 0xFFFF_FFFF_C000_0000;
+const QOS_HIGH_ALIAS_DELTA: u64 = 0xFFFF_FFFF_4000_0000;
 
 const VIRTIO_MMIO_BASE_START: usize = 0x0A00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -270,6 +273,10 @@ _start:
     orr x24, x24, #(1 << 0)
     msr sctlr_el1, x24
     isb
+    ldr x24, =0xFFFFFFFF40000000
+    adr x25, 2f
+    add x25, x25, x24
+    br x25
 2:
     mov x0, x19
     adrp x1, QOS_STACK
@@ -1764,6 +1771,14 @@ fn align_up(value: usize, align: usize) -> usize {
     (value + (align - 1)) & !(align - 1)
 }
 
+fn virt_to_phys(addr: u64) -> u64 {
+    if (QOS_HIGH_ALIAS_BASE..QOS_HIGH_ALIAS_END).contains(&addr) {
+        addr - QOS_HIGH_ALIAS_DELTA
+    } else {
+        addr
+    }
+}
+
 fn write_be16(buf: &mut [u8], off: usize, value: u16) {
     buf[off] = (value >> 8) as u8;
     buf[off + 1] = value as u8;
@@ -2102,8 +2117,8 @@ fn virtio_net_probe() -> (bool, bool, bool) {
             core::mem::size_of::<LegacyQueuePage>(),
         );
     }
-    let rx_page = unsafe { addr_of!(LEGACY_RX_QUEUE_PAGE.0) as u64 };
-    let tx_page = unsafe { addr_of!(LEGACY_TX_QUEUE_PAGE.0) as u64 };
+    let rx_page = unsafe { virt_to_phys(addr_of!(LEGACY_RX_QUEUE_PAGE.0) as u64) };
+    let tx_page = unsafe { virt_to_phys(addr_of!(LEGACY_TX_QUEUE_PAGE.0) as u64) };
 
     let rx = match virtio_net_init_queue_legacy(base, VIRTIO_NET_QUEUE_RX, rx_page) {
         Some(v) => v,
@@ -2144,7 +2159,7 @@ fn virtio_net_probe() -> (bool, bool, bool) {
         write_volatile(
             rx.desc,
             VirtqDesc {
-                addr: addr_of!(LEGACY_RX_FRAME_BUF) as u64,
+                addr: virt_to_phys(addr_of!(LEGACY_RX_FRAME_BUF) as u64),
                 len: RX_BUF_LEN as u32,
                 flags: VIRTQ_DESC_F_WRITE,
                 next: 0,
@@ -2168,7 +2183,7 @@ fn virtio_net_probe() -> (bool, bool, bool) {
         write_volatile(
             tx.desc,
             VirtqDesc {
-                addr: addr_of!(LEGACY_TX_FRAME_BUF) as u64,
+                addr: virt_to_phys(addr_of!(LEGACY_TX_FRAME_BUF) as u64),
                 len: tx_len,
                 flags: 0,
                 next: 0,
@@ -2217,7 +2232,7 @@ fn virtio_net_probe() -> (bool, bool, bool) {
         write_volatile(
             tx.desc,
             VirtqDesc {
-                addr: addr_of!(LEGACY_TX_FRAME_BUF) as u64,
+                addr: virt_to_phys(addr_of!(LEGACY_TX_FRAME_BUF) as u64),
                 len: icmp_tx_len,
                 flags: 0,
                 next: 0,

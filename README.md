@@ -172,9 +172,9 @@ and `tools/aarch64-probe/src/main.rs`):
 - AArch64 probe boot-info now publishes multiple mmap entries:
   - entry 0: usable RAM region (from DTB `/memory` or deterministic stub)
   - additional reserved entries: kernel image, initramfs, DTB blob
-
-Kernel placement is currently low-VA identity-mapped at `0x4008_0000` (not
-high-half linked yet).
+- AArch64 probe images are now linked at high VA (`0xFFFF_FFFF_8000_0000`)
+  with low physical load addresses (`0x4008_0000`), and startup jumps to the
+  high-half alias after MMU enable.
 
 ### In-Guest Commands
 

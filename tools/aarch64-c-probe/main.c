@@ -26,6 +26,9 @@
 #define QOS_DTB_MAGIC 0xEDFE0DD0u
 #define QOS_MMAP_TYPE_USABLE 1u
 #define QOS_MMAP_TYPE_RESERVED 2u
+#define QOS_HIGH_ALIAS_BASE 0xFFFFFFFF80000000ULL
+#define QOS_HIGH_ALIAS_END 0xFFFFFFFFC0000000ULL
+#define QOS_HIGH_ALIAS_DELTA 0xFFFFFFFF40000000ULL
 #define FDT_MAGIC_BE 0xD00DFEEDu
 #define FDT_BEGIN_NODE 1u
 #define FDT_END_NODE 2u
@@ -1910,6 +1913,13 @@ static uintptr_t align_up(uintptr_t value, uintptr_t align) {
     return (value + (align - 1u)) & ~(align - 1u);
 }
 
+static uint64_t virt_to_phys(uint64_t addr) {
+    if (addr >= QOS_HIGH_ALIAS_BASE && addr < QOS_HIGH_ALIAS_END) {
+        return addr - QOS_HIGH_ALIAS_DELTA;
+    }
+    return addr;
+}
+
 static void write_be16(uint8_t *buf, size_t off, uint16_t value) {
     buf[off] = (uint8_t)(value >> 8);
     buf[off + 1] = (uint8_t)value;
@@ -2291,13 +2301,17 @@ static void virtio_net_probe(int *out_tx_ok, int *out_rx_ok, int *out_icmp_ok) {
 
     memset(LEGACY_RX_QUEUE_PAGE, 0, sizeof(LEGACY_RX_QUEUE_PAGE));
     memset(LEGACY_TX_QUEUE_PAGE, 0, sizeof(LEGACY_TX_QUEUE_PAGE));
-    if (virtio_net_init_queue_legacy(base, VIRTIO_NET_QUEUE_RX, (uintptr_t)&LEGACY_RX_QUEUE_PAGE[0], &rx) != 0) {
+    if (virtio_net_init_queue_legacy(base, VIRTIO_NET_QUEUE_RX,
+                                     (uintptr_t)virt_to_phys((uint64_t)(uintptr_t)&LEGACY_RX_QUEUE_PAGE[0]), &rx) !=
+        0) {
         g_net_tx_stage = NET_TX_STAGE_QUEUE;
         g_net_rx_stage = NET_RX_STAGE_QUEUE;
         g_icmp_real_stage = ICMP_REAL_STAGE_QUEUE;
         return;
     }
-    if (virtio_net_init_queue_legacy(base, VIRTIO_NET_QUEUE_TX, (uintptr_t)&LEGACY_TX_QUEUE_PAGE[0], &tx) != 0) {
+    if (virtio_net_init_queue_legacy(base, VIRTIO_NET_QUEUE_TX,
+                                     (uintptr_t)virt_to_phys((uint64_t)(uintptr_t)&LEGACY_TX_QUEUE_PAGE[0]), &tx) !=
+        0) {
         g_net_tx_stage = NET_TX_STAGE_QUEUE;
         g_net_rx_stage = NET_RX_STAGE_QUEUE;
         g_icmp_real_stage = ICMP_REAL_STAGE_QUEUE;
@@ -2306,7 +2320,7 @@ static void virtio_net_probe(int *out_tx_ok, int *out_rx_ok, int *out_icmp_ok) {
     mmio_write32(base, VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_DRIVER_OK);
 
     memset(LEGACY_RX_FRAME_BUF, 0, sizeof(LEGACY_RX_FRAME_BUF));
-    rx.desc[0].addr = (uint64_t)(uintptr_t)&LEGACY_RX_FRAME_BUF[0];
+    rx.desc[0].addr = virt_to_phys((uint64_t)(uintptr_t)&LEGACY_RX_FRAME_BUF[0]);
     rx.desc[0].len = (uint32_t)RX_BUF_LEN;
     rx.desc[0].flags = VIRTQ_DESC_F_WRITE;
     rx.desc[0].next = 0u;
@@ -2328,7 +2342,7 @@ static void virtio_net_probe(int *out_tx_ok, int *out_rx_ok, int *out_icmp_ok) {
     }
     tx_len = (uint32_t)(VIRTIO_NET_HDR_LEN + frame_len);
 
-    tx.desc[0].addr = (uint64_t)(uintptr_t)&LEGACY_TX_FRAME_BUF[0];
+    tx.desc[0].addr = virt_to_phys((uint64_t)(uintptr_t)&LEGACY_TX_FRAME_BUF[0]);
     tx.desc[0].len = tx_len;
     tx.desc[0].flags = 0u;
     tx.desc[0].next = 0u;
@@ -2362,7 +2376,7 @@ static void virtio_net_probe(int *out_tx_ok, int *out_rx_ok, int *out_icmp_ok) {
         g_icmp_real_stage = ICMP_REAL_STAGE_QUEUE;
     } else {
         tx_len = (uint32_t)(VIRTIO_NET_HDR_LEN + frame_len);
-        tx.desc[0].addr = (uint64_t)(uintptr_t)&LEGACY_TX_FRAME_BUF[0];
+        tx.desc[0].addr = virt_to_phys((uint64_t)(uintptr_t)&LEGACY_TX_FRAME_BUF[0]);
         tx.desc[0].len = tx_len;
         tx.desc[0].flags = 0u;
         tx.desc[0].next = 0u;
