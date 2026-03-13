@@ -105,6 +105,13 @@ Patch governance:
 
 Authentic boot requirement: no direct `qemu -kernel` in the primary smoke path.
 
+Orchestration contract:
+
+- `make linux1` is the single orchestrator and invokes scripts in strict order.
+- Each pipeline step maps to exactly one primary script (`fetch` -> `fetch_linux1_sources.sh`, `build-kernel` -> `build_linux1_kernel.sh`, `build-lilo` -> `build_linux1_lilo.sh`, and so on).
+- On failure, the orchestrator stops immediately and reports the failing step name.
+- Re-run semantics are step-local: rerunning after failure restarts from the failed step with already-produced prerequisite artifacts.
+
 ## Script Interfaces
 
 Each script has a strict interface so units are independently testable and composable.
@@ -125,6 +132,7 @@ Each script has a strict interface so units are independently testable and compo
 - `build_linux1_userspace.sh`
   - Inputs: `linux1-userspace/`
   - Outputs: staged rootfs files under `build/linux1/rootfs/`
+  - Build mode: syscall-only i386 static binaries (`-m32 -nostdlib -static`, no host glibc dependency)
   - Exit codes: non-zero on compile/link/staging failure
 - `mk_linux1_disk.sh`
   - Inputs: built kernel + staged rootfs + fetched/built LILO artifacts
@@ -134,6 +142,19 @@ Each script has a strict interface so units are independently testable and compo
   - Inputs: disk image path
   - Outputs: serial log `build/linux1/logs/boot.log`
   - Exit codes: non-zero on launch/timeout/marker failure
+  - Cleanup: script owns QEMU process lifecycle and must terminate child QEMU process on timeout or completion before exit
+
+## Artifact Contract
+
+Canonical artifact paths:
+
+- kernel image: `build/linux1/kernel/vmlinuz-1.0.0`
+- lilo artifacts: `build/linux1/lilo/`
+- rootfs staging dir: `build/linux1/rootfs/`
+- bootable disk image: `build/linux1/images/linux1-disk.img`
+- boot log: `build/linux1/logs/boot.log`
+
+Scripts must write only to these documented locations (or subpaths) to keep reruns deterministic.
 
 ## Runtime Flow and Markers
 
@@ -158,7 +179,11 @@ Primary marker contract (exact strings):
 - init marker: `linux1-init: start`
 - shell prompt marker: `linux1-sh# `
 
-`run_linux1_qemu.sh` must capture serial output to `build/linux1/logs/boot.log`; tests read this log and assert markers in order.
+Serial capture contract:
+
+- `mk_linux1_disk.sh` writes a `lilo.conf` that enables serial output and passes kernel console on `ttyS0`.
+- `run_linux1_qemu.sh` runs in `-nographic -serial stdio` mode and captures merged output to `build/linux1/logs/boot.log`.
+- Tests read `boot.log` and assert markers in order.
 
 ## Makefile Integration
 
@@ -179,7 +204,7 @@ Add targets at repository root:
   - asserts kernel image exists
 - `test_linux1_disk_boot_lilo`
   - boots disk image via `qemu-system-i386 -hda`
-  - asserts `LILO` marker
+  - asserts `LILO` marker from serial-captured output
 - `test_linux1_boot_to_init_shell`
   - asserts `Linux version 1.0.0`, `linux1-init: start`, and `linux1-sh# ` within timeout
 
@@ -200,6 +225,11 @@ Minimum staged root filesystem contents:
 - `/dev/console` (char 5:1)
 - `/dev/null` (char 1:3)
 
+Userspace ABI contract:
+
+- userspace programs (`/sbin/init`, `/bin/sh`, `/bin/echo`) are built as syscall-only static i386 binaries with local syscall wrappers.
+- no dynamic linker and no dependency on host glibc runtime ABI.
+
 `/sbin/init` behavior contract:
 
 - write `linux1-init: start` to console
@@ -215,17 +245,32 @@ Minimum staged root filesystem contents:
 - deterministic disk geometry and partition layout defined in script, not manual commands.
 - explicit paths and output dirs so repeated runs are reproducible.
 
+Ext2 compatibility contract:
+
+- `mk_linux1_disk.sh` must create ext2 with options compatible with Linux 1.0.0 (for example `mke2fs -t ext2 -O none -I 128 -b 1024`).
+- Script verifies resulting filesystem features and fails if unsupported features are present.
+
+Failure reporting contract:
+
+- Each script logs a step banner at start and an explicit `ERROR:<step>:<reason>` line before non-zero exit.
+- Exit code `1` is reserved for runtime/tool failure; exit code `2` is reserved for validation/checksum/contract violations.
+
 ## Prerequisites (Host)
 
 Baseline expected packages include:
 - `qemu-system-i386`
 - `gcc-i686-linux-gnu`
 - `binutils-i686-linux-gnu`
-- `libc6-dev-i386-cross`
 - `make`, `bison`, `flex`, `perl`
 - ext2 and partition tooling (`e2fsprogs`, `fdisk`/`sfdisk`, loop-mount support)
 
-Supported baseline host: Ubuntu 24.04 (including AArch64) using i386 cross toolchain packages above.
+Supported baseline host (initial milestone): Ubuntu 24.04 x86_64.
+AArch64 host support is a follow-up milestone after Linux1 flow is validated on x86_64.
+
+Environment lock guidance:
+
+- CI captures and publishes `dpkg-query` package versions for required toolchain/runtime packages.
+- Linux1 verification jobs run against that locked package set to reduce environment drift.
 
 ## Security and Safety Notes
 
@@ -248,6 +293,13 @@ Linux1 integration is done when all are true:
 - `make linux1` produces a bootable disk image.
 - `make test-linux1` passes locally and proves BIOS->MBR->LILO->kernel->init/prompt flow.
 - documentation explains fetch/build/run/clean workflow and patch policy.
+
+LILO provenance scope for done criteria:
+
+- source archive checksum verification
+- patch stack apply verification
+- deterministic command path verification
+- artifact presence + expected version/signature checks (source reproducibility, not byte-identical binary reproducibility)
 
 ## Open Risks
 
