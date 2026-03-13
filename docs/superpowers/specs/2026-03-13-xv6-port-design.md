@@ -88,24 +88,11 @@ Notes:
 
 ### `xv6/Makefile` Patches
 
-The upstream Makefile auto-detects `TOOLPREFIX` by probing for `i386-jos-elf-gcc` or
-`i386-elf-gcc`. On this AArch64 host neither is present, so the auto-detection falls back to
-an empty prefix, causing the build to use the host `gcc` (AArch64). The patch overrides this.
+No Makefile patches are required. The upstream Makefile uses a `ifndef TOOLPREFIX` guard,
+so passing `TOOLPREFIX=i686-linux-gnu-` on the command line in `build_xv6.sh` overrides the
+auto-detection entirely. The `QEMU` variable defaults to `qemu-system-i386`, which is correct.
 
-**Exact patch (unified diff):**
-
-```diff
---- a/xv6/Makefile
-+++ b/xv6/Makefile
-@@ -1,5 +1,5 @@
--TOOLPREFIX =
-+TOOLPREFIX = i686-linux-gnu-
-```
-
-The upstream `QEMU` variable defaults to `qemu-system-i386`, which is correct. No change
-needed. No other Makefile changes are required.
-
-The Makefile target used by the build script is `xv6.img` (upstream default).
+The build script builds both `xv6.img` and `fs.img` — both are required for a bootable xv6.
 
 ### `scripts/build_xv6.sh`
 
@@ -114,8 +101,11 @@ The Makefile target used by the build script is `xv6.img` (upstream default).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT/xv6"
-make TOOLPREFIX=i686-linux-gnu- xv6.img
+make TOOLPREFIX=i686-linux-gnu- xv6.img fs.img
 ```
+
+Both `xv6.img` (boot + kernel) and `fs.img` (root filesystem) are required. Without `fs.img`,
+xv6 panics in `ide.c` before the shell prompt is printed.
 
 `ROOT` resolution uses `${BASH_SOURCE[0]}`, matching the convention in other `scripts/` files,
 so the script works correctly regardless of the working directory from which it is invoked.
@@ -126,6 +116,11 @@ The existing `test-all` and `clean` targets are **edited in-place** (not duplica
 targets in GNU Make silently drop the earlier recipe. New targets `xv6`, `xv6-clean`, and
 `test-xv6` are added. Parallel `make -j` is not supported — `test-xv6` has no declared
 dependency on `xv6` in the Makefile; the build is handled by the pytest fixture instead.
+
+**`test-all` prerequisite:** `gcc-i686-linux-gnu` and `qemu-system-x86` must be installed for
+`test-all` to pass. The existing `test_qemu_serial_smoke.py::test_test_all_uses_real_qemu_serial_markers`
+test runs `make test-all` — it will only pass once these packages are installed. Both packages
+are available on this host and must be declared as CI prerequisites.
 
 **Diff against the existing root `Makefile`:**
 
@@ -213,6 +208,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 XV6_IMG = ROOT / "xv6" / "xv6.img"
+XV6_FS_IMG = ROOT / "xv6" / "fs.img"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -231,6 +227,7 @@ def build_xv6():
 
 def test_xv6_build():
     assert XV6_IMG.exists(), f"xv6.img not found at {XV6_IMG}"
+    assert XV6_FS_IMG.exists(), f"fs.img not found at {XV6_FS_IMG}"
 
 
 def test_xv6_boot_smoke():
@@ -240,6 +237,7 @@ def test_xv6_boot_smoke():
             "-nographic",
             "-serial", "stdio",
             "-drive", f"file={XV6_IMG},index=0,media=disk,format=raw",
+            "-drive", f"file={XV6_FS_IMG},index=1,media=disk,format=raw",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
