@@ -1664,6 +1664,7 @@ static void dtb_extract_boot_info(uint64_t dtb_addr, dtb_boot_extract_t *out) {
     size_t depth = 0;
     uint8_t in_memory[DTB_MAX_DEPTH];
     uint8_t in_chosen[DTB_MAX_DEPTH];
+    uint8_t in_chosen_module[DTB_MAX_DEPTH];
     size_t addr_cells = 2u;
     size_t size_cells = 2u;
     uint64_t initrd_start = 0;
@@ -1720,6 +1721,7 @@ static void dtb_extract_boot_info(uint64_t dtb_addr, dtb_boot_extract_t *out) {
 
     memset(in_memory, 0, sizeof(in_memory));
     memset(in_chosen, 0, sizeof(in_chosen));
+    memset(in_chosen_module, 0, sizeof(in_chosen_module));
     pos = off_struct;
     while (pos + 4u <= struct_end) {
         uint32_t token = 0;
@@ -1733,8 +1735,10 @@ static void dtb_extract_boot_info(uint64_t dtb_addr, dtb_boot_extract_t *out) {
             size_t parent_depth = depth;
             int parent_mem = 0;
             int parent_chosen = 0;
+            int parent_module = 0;
             int this_mem = 0;
             int this_chosen = 0;
+            int this_module = 0;
 
             if (dtb_cstr_end(blob, name_start, struct_end, &name_end) != 0) {
                 return;
@@ -1745,12 +1749,16 @@ static void dtb_extract_boot_info(uint64_t dtb_addr, dtb_boot_extract_t *out) {
             if (parent_depth != 0u) {
                 parent_mem = in_memory[parent_depth - 1u] != 0u;
                 parent_chosen = in_chosen[parent_depth - 1u] != 0u;
+                parent_module = in_chosen_module[parent_depth - 1u] != 0u;
             }
             this_mem =
                 parent_mem || (parent_depth == 1u && dtb_name_starts_with(blob, name_start, name_end, "memory"));
             this_chosen = parent_chosen || (parent_depth == 1u && dtb_name_eq(blob, name_start, name_end, "chosen"));
+            this_module =
+                parent_module || (parent_chosen && dtb_name_starts_with(blob, name_start, name_end, "module@"));
             in_memory[depth] = (uint8_t)(this_mem ? 1u : 0u);
             in_chosen[depth] = (uint8_t)(this_chosen ? 1u : 0u);
+            in_chosen_module[depth] = (uint8_t)(this_module ? 1u : 0u);
             depth++;
             pos = (name_end + 1u + 3u) & ~3u;
         } else if (token == FDT_END_NODE) {
@@ -1765,6 +1773,7 @@ static void dtb_extract_boot_info(uint64_t dtb_addr, dtb_boot_extract_t *out) {
             const uint8_t *value = 0;
             int cur_mem = 0;
             int cur_chosen = 0;
+            int cur_module = 0;
 
             if (pos + 8u > struct_end) {
                 return;
@@ -1785,6 +1794,7 @@ static void dtb_extract_boot_info(uint64_t dtb_addr, dtb_boot_extract_t *out) {
             }
             cur_mem = in_memory[depth - 1u] != 0u;
             cur_chosen = in_chosen[depth - 1u] != 0u;
+            cur_module = in_chosen_module[depth - 1u] != 0u;
 
             if (depth == 1u && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, "#address-cells") &&
                 len >= 4u) {
@@ -1826,6 +1836,39 @@ static void dtb_extract_boot_info(uint64_t dtb_addr, dtb_boot_extract_t *out) {
                     initrd_end = v;
                     have_initrd_end = 1;
                 }
+            } else if (cur_chosen && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, "initrd-start")) {
+                uint64_t v = 0;
+                if (dtb_parse_scalar_be(value, len, &v) == 0) {
+                    initrd_start = v;
+                    have_initrd_start = 1;
+                }
+            } else if (cur_chosen && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, "initrd-end")) {
+                uint64_t v = 0;
+                if (dtb_parse_scalar_be(value, len, &v) == 0) {
+                    initrd_end = v;
+                    have_initrd_end = 1;
+                }
+            } else if (cur_module && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, "reg")) {
+                size_t need = (addr_cells + size_cells) * 4u;
+                if (len >= need) {
+                    uint64_t base_v = 0;
+                    uint64_t size_v = 0;
+                    if (dtb_parse_cells_be(value, len, addr_cells, &base_v) == 0 &&
+                        dtb_parse_cells_be(value + addr_cells * 4u, len - addr_cells * 4u, size_cells, &size_v) == 0 &&
+                        size_v != 0u) {
+                        uint64_t end_v = base_v + size_v;
+                        if (end_v > base_v) {
+                            if (!have_initrd_start || base_v < initrd_start) {
+                                initrd_start = base_v;
+                                have_initrd_start = 1;
+                            }
+                            if (!have_initrd_end || end_v > initrd_end) {
+                                initrd_end = end_v;
+                                have_initrd_end = 1;
+                            }
+                        }
+                    }
+                }
             }
         } else if (token == FDT_NOP) {
             continue;
@@ -1839,6 +1882,7 @@ static void dtb_extract_boot_info(uint64_t dtb_addr, dtb_boot_extract_t *out) {
     for (i = 0; i < DTB_MAX_DEPTH; i++) {
         (void)in_memory[i];
         (void)in_chosen[i];
+        (void)in_chosen_module[i];
     }
     if (have_initrd_start && have_initrd_end && initrd_end > initrd_start) {
         out->initramfs_from_dtb = 1;

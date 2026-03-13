@@ -1629,6 +1629,7 @@ fn dtb_extract_boot_info(dtb_addr: u64) -> DtbBootExtract {
     let mut depth = 0usize;
     let mut in_memory = [false; DTB_MAX_DEPTH];
     let mut in_chosen = [false; DTB_MAX_DEPTH];
+    let mut in_chosen_module = [false; DTB_MAX_DEPTH];
     let mut addr_cells = 2usize;
     let mut size_cells = 2usize;
     let mut out = DtbBootExtract::empty();
@@ -1666,13 +1667,22 @@ fn dtb_extract_boot_info(dtb_addr: u64) -> DtbBootExtract {
                 } else {
                     in_chosen[parent_depth - 1]
                 };
+                let parent_module = if parent_depth == 0 {
+                    false
+                } else {
+                    in_chosen_module[parent_depth - 1]
+                };
                 let this_mem = parent_mem
                     || (parent_depth == 1
                         && dtb_node_name_starts_with(blob, name_start, name_end, b"memory"));
                 let this_chosen = parent_chosen
                     || (parent_depth == 1 && dtb_node_name_eq(blob, name_start, name_end, b"chosen"));
+                let this_module = parent_module
+                    || (parent_chosen
+                        && dtb_node_name_starts_with(blob, name_start, name_end, b"module@"));
                 in_memory[depth] = this_mem;
                 in_chosen[depth] = this_chosen;
+                in_chosen_module[depth] = this_module;
                 depth += 1;
                 pos = align_up(name_end + 1, 4);
             }
@@ -1706,6 +1716,7 @@ fn dtb_extract_boot_info(dtb_addr: u64) -> DtbBootExtract {
                 }
                 let cur_mem = in_memory[depth - 1];
                 let cur_chosen = in_chosen[depth - 1];
+                let cur_module = in_chosen_module[depth - 1];
 
                 if depth == 1
                     && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, b"#address-cells")
@@ -1752,6 +1763,43 @@ fn dtb_extract_boot_info(dtb_addr: u64) -> DtbBootExtract {
                     if let Some(v) = dtb_parse_scalar_be(value) {
                         initrd_end = v;
                         have_initrd_end = true;
+                    }
+                } else if cur_chosen
+                    && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, b"initrd-start")
+                {
+                    if let Some(v) = dtb_parse_scalar_be(value) {
+                        initrd_start = v;
+                        have_initrd_start = true;
+                    }
+                } else if cur_chosen
+                    && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, b"initrd-end")
+                {
+                    if let Some(v) = dtb_parse_scalar_be(value) {
+                        initrd_end = v;
+                        have_initrd_end = true;
+                    }
+                } else if cur_module
+                    && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, b"reg")
+                {
+                    let need = (addr_cells + size_cells) * 4;
+                    if value.len() >= need {
+                        let base_v = dtb_parse_cells_be(value, addr_cells);
+                        let size_v = dtb_parse_cells_be(&value[addr_cells * 4..], size_cells);
+                        if let (Some(base), Some(size)) = (base_v, size_v) {
+                            if size != 0 {
+                                let end = base.saturating_add(size);
+                                if end > base {
+                                    if !have_initrd_start || base < initrd_start {
+                                        initrd_start = base;
+                                        have_initrd_start = true;
+                                    }
+                                    if !have_initrd_end || end > initrd_end {
+                                        initrd_end = end;
+                                        have_initrd_end = true;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
