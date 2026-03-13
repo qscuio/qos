@@ -90,6 +90,9 @@
 #define QOS_ELF_CMD_CAT 7u
 #define QOS_ELF_CMD_TOUCH 8u
 #define QOS_ELF_CMD_EDIT 9u
+#define QOS_ELF_CMD_INSMOD 10u
+#define QOS_ELF_CMD_RMMOD 11u
+#define QOS_ELF_CMD_WQDEMO 12u
 
 #define QOS_ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -318,11 +321,18 @@ static const qos_user_elf_t QOS_USER_ELFS[] = {
     {"/bin/cat", qos_cmd_cat_elf, sizeof(qos_cmd_cat_elf), QOS_ELF_CMD_CAT},
     {"/bin/touch", qos_cmd_touch_elf, sizeof(qos_cmd_touch_elf), QOS_ELF_CMD_TOUCH},
     {"/bin/edit", qos_cmd_edit_elf, sizeof(qos_cmd_edit_elf), QOS_ELF_CMD_EDIT},
+    {"/bin/insmod", qos_cmd_insmod_elf, sizeof(qos_cmd_insmod_elf), QOS_ELF_CMD_INSMOD},
+    {"/bin/rmmod", qos_cmd_rmmod_elf, sizeof(qos_cmd_rmmod_elf), QOS_ELF_CMD_RMMOD},
+    {"/bin/wqdemo", qos_cmd_wqdemo_elf, sizeof(qos_cmd_wqdemo_elf), QOS_ELF_CMD_WQDEMO},
 };
 
 static uint32_t g_next_pid = 3u;
 static char g_shell_files[64][128];
 static uint8_t g_shell_file_used[64];
+static uint8_t g_loaded_module_used[32];
+static uint32_t g_loaded_module_ids[32];
+static char g_loaded_module_paths[32][128];
+static uint32_t g_wq_demo_hits = 0;
 
 static void shell_out_clear(char *out, size_t cap) {
     if (out != 0 && cap != 0) {
@@ -384,6 +394,82 @@ static void shell_track_file(const char *path) {
             return;
         }
     }
+}
+
+static int parse_u32_arg(const char *text, uint32_t *out) {
+    uint64_t value = 0;
+    size_t i = 0;
+    if (text == 0 || out == 0 || text[0] == '\0') {
+        return -1;
+    }
+    while (text[i] != '\0') {
+        unsigned char ch = (unsigned char)text[i];
+        if (ch < '0' || ch > '9') {
+            return -1;
+        }
+        value = value * 10u + (uint64_t)(ch - '0');
+        if (value > UINT32_MAX) {
+            return -1;
+        }
+        i++;
+    }
+    *out = (uint32_t)value;
+    return 0;
+}
+
+static void module_track_loaded(const char *path, uint32_t module_id) {
+    uint32_t i;
+    if (path == 0 || path[0] == '\0' || module_id == 0) {
+        return;
+    }
+    for (i = 0; i < QOS_ARRAY_LEN(g_loaded_module_used); i++) {
+        if (g_loaded_module_used[i] != 0 && strcmp(g_loaded_module_paths[i], path) == 0) {
+            g_loaded_module_ids[i] = module_id;
+            return;
+        }
+    }
+    for (i = 0; i < QOS_ARRAY_LEN(g_loaded_module_used); i++) {
+        if (g_loaded_module_used[i] == 0) {
+            g_loaded_module_used[i] = 1;
+            g_loaded_module_ids[i] = module_id;
+            strncpy(g_loaded_module_paths[i], path, sizeof(g_loaded_module_paths[i]) - 1u);
+            g_loaded_module_paths[i][sizeof(g_loaded_module_paths[i]) - 1u] = '\0';
+            return;
+        }
+    }
+}
+
+static int module_find_id_by_path(const char *path, uint32_t *out_module_id) {
+    uint32_t i;
+    if (path == 0 || out_module_id == 0) {
+        return -1;
+    }
+    for (i = 0; i < QOS_ARRAY_LEN(g_loaded_module_used); i++) {
+        if (g_loaded_module_used[i] != 0 && strcmp(g_loaded_module_paths[i], path) == 0) {
+            *out_module_id = g_loaded_module_ids[i];
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void module_forget_id(uint32_t module_id) {
+    uint32_t i;
+    if (module_id == 0) {
+        return;
+    }
+    for (i = 0; i < QOS_ARRAY_LEN(g_loaded_module_used); i++) {
+        if (g_loaded_module_used[i] != 0 && g_loaded_module_ids[i] == module_id) {
+            g_loaded_module_used[i] = 0;
+            g_loaded_module_ids[i] = 0;
+            g_loaded_module_paths[i][0] = '\0';
+            return;
+        }
+    }
+}
+
+static void wq_demo_job(void *arg) {
+    g_wq_demo_hits += (uint32_t)(uintptr_t)arg;
 }
 
 static int shell_path_exists(const char *path) {
@@ -526,6 +612,73 @@ static uint32_t elf_u32(const uint8_t *p) {
 static uint64_t elf_u64(const uint8_t *p) {
     return (uint64_t)p[0] | ((uint64_t)p[1] << 8) | ((uint64_t)p[2] << 16) | ((uint64_t)p[3] << 24) |
            ((uint64_t)p[4] << 32) | ((uint64_t)p[5] << 40) | ((uint64_t)p[6] << 48) | ((uint64_t)p[7] << 56);
+}
+
+static void elf_w16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)(v >> 8);
+}
+
+static void elf_w32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+    p[2] = (uint8_t)((v >> 16) & 0xFFu);
+    p[3] = (uint8_t)((v >> 24) & 0xFFu);
+}
+
+static void elf_w64(uint8_t *p, uint64_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+    p[2] = (uint8_t)((v >> 16) & 0xFFu);
+    p[3] = (uint8_t)((v >> 24) & 0xFFu);
+    p[4] = (uint8_t)((v >> 32) & 0xFFu);
+    p[5] = (uint8_t)((v >> 40) & 0xFFu);
+    p[6] = (uint8_t)((v >> 48) & 0xFFu);
+    p[7] = (uint8_t)((v >> 56) & 0xFFu);
+}
+
+static size_t build_test_shared_elf_image(uint8_t *out, size_t cap) {
+    const uint64_t phoff = 64u;
+    if (out == 0 || cap < 256u) {
+        return 0;
+    }
+    memset(out, 0, 256u);
+    out[0] = 0x7Fu;
+    out[1] = 'E';
+    out[2] = 'L';
+    out[3] = 'F';
+    out[4] = 2u;
+    out[5] = 1u;
+    out[6] = 1u;
+
+    elf_w16(out + 16u, 3u);
+    elf_w16(out + 18u, 0x3Eu);
+    elf_w32(out + 20u, 1u);
+    elf_w64(out + 24u, 0x401000u);
+    elf_w64(out + 32u, phoff);
+    elf_w16(out + 52u, 64u);
+    elf_w16(out + 54u, 56u);
+    elf_w16(out + 56u, 1u);
+
+    elf_w32(out + phoff, 1u);
+    elf_w32(out + phoff + 4u, 5u);
+    elf_w64(out + phoff + 8u, 0u);
+    elf_w64(out + phoff + 16u, 0x400000u);
+    elf_w64(out + phoff + 24u, 0u);
+    elf_w64(out + phoff + 32u, 128u);
+    elf_w64(out + phoff + 40u, 128u);
+    elf_w64(out + phoff + 48u, 0x1000u);
+    return 256u;
+}
+
+static void stage_test_module_artifacts(void) {
+    uint8_t image[256];
+    size_t len = build_test_shared_elf_image(image, sizeof(image));
+    if (len == 0) {
+        return;
+    }
+    (void)shell_write_file_bytes("/lib/libqos_test.so", image, len);
+    (void)shell_write_file_bytes("/lib/modules/qos_test.ko", image, len);
 }
 
 static int validate_elf_image(const uint8_t *image, size_t len) {
@@ -830,6 +983,72 @@ static int elf_run_command(uint8_t cmd_id, uint32_t pid, const char *args, const
         shell_out_append(out, out_cap, "\n");
         return 0;
     }
+    if (cmd_id == QOS_ELF_CMD_INSMOD) {
+        int64_t module_id;
+        if (safe_args[0] == '\0') {
+            shell_out_append(out, out_cap, "insmod: missing path\n");
+            return 1;
+        }
+        module_id = qos_syscall_dispatch(SYSCALL_NR_MODLOAD, (uint64_t)(uintptr_t)safe_args, 0, 0, 0);
+        if (module_id < 0) {
+            shell_out_append(out, out_cap, "insmod: failed ");
+            shell_out_append(out, out_cap, safe_args);
+            shell_out_append(out, out_cap, "\n");
+            return 1;
+        }
+        module_track_loaded(safe_args, (uint32_t)module_id);
+        shell_out_append(out, out_cap, "insmod: loaded id=");
+        shell_out_append_u32(out, out_cap, (uint32_t)module_id);
+        shell_out_append(out, out_cap, " path=");
+        shell_out_append(out, out_cap, safe_args);
+        shell_out_append(out, out_cap, "\n");
+        return 0;
+    }
+    if (cmd_id == QOS_ELF_CMD_RMMOD) {
+        uint32_t module_id = 0;
+        if (safe_args[0] == '\0') {
+            shell_out_append(out, out_cap, "rmmod: missing id or path\n");
+            return 1;
+        }
+        if (parse_u32_arg(safe_args, &module_id) != 0) {
+            if (module_find_id_by_path(safe_args, &module_id) != 0) {
+                shell_out_append(out, out_cap, "rmmod: unknown module ");
+                shell_out_append(out, out_cap, safe_args);
+                shell_out_append(out, out_cap, "\n");
+                return 1;
+            }
+        }
+        if (qos_syscall_dispatch(SYSCALL_NR_MODUNLOAD, module_id, 0, 0, 0) != 0) {
+            shell_out_append(out, out_cap, "rmmod: failed id=");
+            shell_out_append_u32(out, out_cap, module_id);
+            shell_out_append(out, out_cap, "\n");
+            return 1;
+        }
+        module_forget_id(module_id);
+        shell_out_append(out, out_cap, "rmmod: unloaded id=");
+        shell_out_append_u32(out, out_cap, module_id);
+        shell_out_append(out, out_cap, "\n");
+        return 0;
+    }
+    if (cmd_id == QOS_ELF_CMD_WQDEMO) {
+        uint32_t wid1 = 0;
+        uint32_t wid2 = 0;
+        g_wq_demo_hits = 0;
+        if (qos_workqueue_enqueue(wq_demo_job, (void *)(uintptr_t)1u, &wid1) != 0 ||
+            qos_workqueue_enqueue(wq_demo_job, (void *)(uintptr_t)2u, &wid2) != 0) {
+            shell_out_append(out, out_cap, "wqdemo: enqueue failed\n");
+            return 1;
+        }
+        (void)qos_softirq_run();
+        shell_out_append(out, out_cap, "workqueue demo: pending=");
+        shell_out_append_u32(out, out_cap, qos_workqueue_pending_count());
+        shell_out_append(out, out_cap, " completed=");
+        shell_out_append_u32(out, out_cap, qos_workqueue_completed_count());
+        shell_out_append(out, out_cap, " hits=");
+        shell_out_append_u32(out, out_cap, g_wq_demo_hits);
+        shell_out_append(out, out_cap, "\n");
+        return 0;
+    }
     shell_out_append(out, out_cap, "exec: unknown image command\n");
     return 1;
 }
@@ -922,6 +1141,7 @@ static void execute_segment(uint32_t shell_pid, char tokens[][128], int n, const
         shell_out_append(out, out_cap, "qos-sh commands:\n");
         shell_out_append(out, out_cap, "  help\n  echo <text>\n  ps\n  ping <ip>\n  ip addr\n  ip route\n");
         shell_out_append(out, out_cap, "  wget <url>\n  ls\n  cat <path>\n  touch <path>\n  edit <path> [text]\n");
+        shell_out_append(out, out_cap, "  insmod <path>\n  rmmod <id|path>\n  wqdemo\n");
         shell_out_append(out, out_cap, "  exit\n");
     } else if (strcmp(argv[0], "exit") == 0) {
         shell_out_append(out, out_cap, "logout\n");
@@ -1036,6 +1256,9 @@ static void run_init_process(void) {
     int shell_ok = 0;
     memset(g_shell_files, 0, sizeof(g_shell_files));
     memset(g_shell_file_used, 0, sizeof(g_shell_file_used));
+    memset(g_loaded_module_used, 0, sizeof(g_loaded_module_used));
+    memset(g_loaded_module_ids, 0, sizeof(g_loaded_module_ids));
+    memset(g_loaded_module_paths, 0, sizeof(g_loaded_module_paths));
     if (init_ok) {
         shell_ok = qos_syscall_dispatch(SYSCALL_NR_FORK, QOS_INIT_PID, QOS_SHELL_PID, 0, 0) >= 0;
     }
@@ -1052,6 +1275,7 @@ static void run_init_process(void) {
     }
     (void)qos_syscall_dispatch(SYSCALL_NR_MKDIR, (uint64_t)(uintptr_t)"/tmp", 0, 0, 0);
     (void)qos_syscall_dispatch(SYSCALL_NR_MKDIR, (uint64_t)(uintptr_t)"/data", 0, 0, 0);
+    stage_test_module_artifacts();
     run_serial_shell(QOS_SHELL_PID);
 }
 

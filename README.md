@@ -161,8 +161,8 @@ Expected serial output includes:
 Current shell features are split by target:
 
 - x86_64 probe shells: `help`, `echo`, `ps`, `ping`, `ip`, `wget`, `exit`
-- aarch64 C probe shell: adds `ls`, `cat`, `touch`, `edit`, plus shell operators `<`, `>`, `>>`, `|`
-- aarch64 Rust probe shell: supports `ls`, `pwd`, `cat`, `touch`, `edit` in addition to `help`, `echo`, `ps`, `ping`, `ip`, `wget`, `exit`
+- aarch64 C probe shell: adds `ls`, `cat`, `touch`, `edit`, `insmod`, `rmmod`, `wqdemo`, plus shell operators `<`, `>`, `>>`, `|`
+- aarch64 Rust probe shell: supports `ls`, `pwd`, `cat`, `touch`, `edit`, `insmod`, `rmmod`, `wqdemo` in addition to `help`, `echo`, `ps`, `ping`, `ip`, `wget`, `exit`
 
 For C/aarch64, each `/bin/*` command image is built from source in
 `tools/aarch64-c-probe/cmd-src/*.c` and embedded as ELF bytes by
@@ -175,6 +175,13 @@ emit per-command ELF files on disk at:
 - `c-os/build/aarch64/rootfs/bin/`
 - `rust-os/build/x86_64/rootfs/bin/`
 - `rust-os/build/aarch64/rootfs/bin/`
+
+Source-built test plugin artifacts are also generated at build time:
+
+- `c-os/build/<arch>/rootfs/lib/libqos_test.so`
+- `c-os/build/<arch>/rootfs/lib/modules/qos_test.ko`
+- `rust-os/build/<arch>/rootfs/lib/libqos_test.so`
+- `rust-os/build/<arch>/rootfs/lib/modules/qos_test.ko`
 
 `edit` command usage:
 
@@ -221,6 +228,12 @@ Userspace wrappers are available in both libc implementations:
 
 - C libc: `qos_dlopen`, `qos_dlclose`, `qos_dlsym`, `qos_modload`, `qos_modunload`, `qos_modreload`
 - Rust libc: same `qos_*` API names
+
+Shell commands for module lifecycle and workqueue demo:
+
+- `insmod /lib/modules/qos_test.ko`
+- `rmmod /lib/modules/qos_test.ko` (or `rmmod <id>`)
+- `wqdemo` (enqueues two work items and drains them via softirq)
 
 ## Useful QEMU Options
 

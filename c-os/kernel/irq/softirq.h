@@ -6,6 +6,7 @@
 #define QOS_SOFTIRQ_MAX 8U
 #define QOS_SOFTIRQ_TIMER 0U
 #define QOS_SOFTIRQ_NET_RX 1U
+#define QOS_SOFTIRQ_WORKQUEUE 2U
 
 typedef void (*qos_softirq_handler_t)(void *ctx);
 

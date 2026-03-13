@@ -14,6 +14,8 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cmd_bin_dir="$out_dir/rootfs/bin"
 "$root_dir/scripts/build_x86_cmd_bins.sh" "$cmd_bin_dir"
+rootfs_dir="$out_dir/rootfs"
+"$root_dir/scripts/build_test_modules.sh" x86_64 "$rootfs_dir"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT

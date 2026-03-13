@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-CMDS = ("echo", "ps", "ping", "ip", "wget", "ls", "cat", "touch", "edit")
+CMDS = ("echo", "ps", "ping", "ip", "wget", "ls", "cat", "touch", "edit", "insmod", "rmmod", "wqdemo")
 
 
 @pytest.mark.parametrize("impl", ["c", "rust"])

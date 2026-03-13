@@ -10,7 +10,7 @@ in_bin_dir="$1"
 out_header="$2"
 out_dir="$(dirname "$out_header")"
 
-cmds=(echo ps ping ip wget ls cat touch edit)
+cmds=(echo ps ping ip wget ls cat touch edit insmod rmmod wqdemo)
 
 mkdir -p "$out_dir"
 

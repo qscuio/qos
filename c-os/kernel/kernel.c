@@ -11,6 +11,7 @@ extern void softirq_init(void) QOS_WEAK;
 extern void timer_init(void) QOS_WEAK;
 extern void napi_init(void) QOS_WEAK;
 extern void kthread_init(void) QOS_WEAK;
+extern void workqueue_init(void) QOS_WEAK;
 
 int qos_boot_info_validate(const boot_info_t *boot_info) {
     if (boot_info == 0) {
@@ -89,6 +90,9 @@ int qos_kernel_entry(const boot_info_t *boot_info) {
     }
     if (kthread_init != 0) {
         kthread_init();
+    }
+    if (workqueue_init != 0) {
+        workqueue_init();
     }
     sched_init();
     syscall_init();

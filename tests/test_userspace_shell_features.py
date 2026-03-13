@@ -64,6 +64,15 @@ def _path_script() -> str:
     )
 
 
+def _module_script() -> str:
+    return (
+        "insmod /lib/modules/qos_test.ko\n"
+        "rmmod /lib/modules/qos_test.ko\n"
+        "wqdemo\n"
+        "exit\n"
+    )
+
+
 def test_c_shell_supports_quotes_redirection_pipes_and_builtins() -> None:
     shell = _build_c_shell()
     run = _run([str(shell)], input_text=_script())
@@ -143,3 +152,28 @@ def test_rust_shell_resolves_commands_via_path() -> None:
     assert text.count("unknown command: ls") >= 2
     assert "set PATH=/bin:/usr/bin" in text
     assert "/tmp" in text
+
+
+def test_c_shell_supports_module_commands_and_workqueue_demo() -> None:
+    shell = _build_c_shell()
+    run = _run([str(shell)], input_text=_module_script())
+    assert run.returncode == 0, f"shell failed:\n{run.stderr}\nstdout:\n{run.stdout}"
+    text = run.stdout
+    assert "insmod: loaded id=" in text
+    assert "path=/lib/modules/qos_test.ko" in text
+    assert "rmmod: unloaded id=" in text
+    assert "workqueue demo: pending=0 completed=2 hits=3" in text
+
+
+def test_rust_shell_supports_module_commands_and_workqueue_demo() -> None:
+    run = _run(
+        ["cargo", "run", "--quiet", "-p", "qos-userspace"],
+        cwd=ROOT / "rust-os",
+        input_text=_module_script(),
+    )
+    assert run.returncode == 0, f"shell failed:\n{run.stderr}\nstdout:\n{run.stdout}"
+    text = run.stdout
+    assert "insmod: loaded id=" in text
+    assert "path=/lib/modules/qos_test.ko" in text
+    assert "rmmod: unloaded id=" in text
+    assert "workqueue demo: pending=0 completed=2 hits=3" in text

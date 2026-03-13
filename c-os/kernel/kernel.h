@@ -15,6 +15,7 @@
 #include "sched/sched.h"
 #include "syscall/syscall.h"
 #include "timer/timer.h"
+#include "workqueue/workqueue.h"
 
 enum {
     QOS_INIT_MM = 1u << 0,

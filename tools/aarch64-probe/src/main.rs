@@ -8,8 +8,10 @@ use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 use core::sync::atomic::{fence, Ordering};
 use qos_boot::boot_info::{BootInfo, MmapEntry, QOS_BOOT_MAGIC};
 use qos_kernel::{
-    kernel_entry, net_icmp_echo, proc_create, proc_fork, syscall_dispatch, QOS_NET_IPV4_GATEWAY,
-    QOS_NET_IPV4_LOCAL, SYSCALL_NR_CLOSE, SYSCALL_NR_LSEEK, SYSCALL_NR_MKDIR, SYSCALL_NR_OPEN,
+    kernel_entry, net_icmp_echo, proc_create, proc_fork, softirq_run, syscall_dispatch,
+    workqueue_completed_count, workqueue_enqueue, workqueue_pending_count, workqueue_reset,
+    QOS_NET_IPV4_GATEWAY, QOS_NET_IPV4_LOCAL, SYSCALL_NR_CLOSE, SYSCALL_NR_LSEEK,
+    SYSCALL_NR_MKDIR, SYSCALL_NR_MODLOAD, SYSCALL_NR_MODUNLOAD, SYSCALL_NR_OPEN,
     SYSCALL_NR_QUERY_DRIVERS_COUNT, SYSCALL_NR_QUERY_INIT_STATE, SYSCALL_NR_QUERY_NET_QUEUE_LEN,
     SYSCALL_NR_QUERY_PMM_FREE, SYSCALL_NR_QUERY_PMM_TOTAL, SYSCALL_NR_QUERY_PROC_COUNT,
     SYSCALL_NR_QUERY_SCHED_COUNT, SYSCALL_NR_QUERY_SYSCALL_COUNT, SYSCALL_NR_QUERY_VFS_COUNT,
@@ -96,6 +98,21 @@ static mut SHELL_FILE_PATH_LENS: [u8; SHELL_FILE_MAX] = [0; SHELL_FILE_MAX];
 
 #[no_mangle]
 static mut SHELL_FILE_USED: [u8; SHELL_FILE_MAX] = [0; SHELL_FILE_MAX];
+
+#[no_mangle]
+static mut MODULE_PATHS: [[u8; SHELL_PATH_MAX]; SHELL_FILE_MAX] = [[0; SHELL_PATH_MAX]; SHELL_FILE_MAX];
+
+#[no_mangle]
+static mut MODULE_PATH_LENS: [u8; SHELL_FILE_MAX] = [0; SHELL_FILE_MAX];
+
+#[no_mangle]
+static mut MODULE_USED: [u8; SHELL_FILE_MAX] = [0; SHELL_FILE_MAX];
+
+#[no_mangle]
+static mut MODULE_IDS: [u32; SHELL_FILE_MAX] = [0; SHELL_FILE_MAX];
+
+#[no_mangle]
+static mut WQ_DEMO_HITS: u32 = 0;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -289,6 +306,92 @@ fn shell_track_file(path: &[u8]) {
     }
 }
 
+fn parse_u32_arg(text: &[u8]) -> Option<u32> {
+    if text.is_empty() {
+        return None;
+    }
+    let mut value = 0u32;
+    for b in text {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+    }
+    Some(value)
+}
+
+fn module_track(path: &[u8], module_id: u32) {
+    if path.is_empty() || path[0] != b'/' || path.len() > (SHELL_PATH_MAX - 1) || module_id == 0 {
+        return;
+    }
+    unsafe {
+        let mut i = 0usize;
+        while i < SHELL_FILE_MAX {
+            if MODULE_USED[i] != 0 {
+                let len = MODULE_PATH_LENS[i] as usize;
+                if len == path.len() && &MODULE_PATHS[i][..len] == path {
+                    MODULE_IDS[i] = module_id;
+                    return;
+                }
+            }
+            i += 1;
+        }
+        i = 0;
+        while i < SHELL_FILE_MAX {
+            if MODULE_USED[i] == 0 {
+                MODULE_USED[i] = 1;
+                MODULE_IDS[i] = module_id;
+                MODULE_PATH_LENS[i] = path.len() as u8;
+                MODULE_PATHS[i][..path.len()].copy_from_slice(path);
+                MODULE_PATHS[i][path.len()] = 0;
+                return;
+            }
+            i += 1;
+        }
+    }
+}
+
+fn module_lookup_id(path: &[u8]) -> Option<u32> {
+    unsafe {
+        let mut i = 0usize;
+        while i < SHELL_FILE_MAX {
+            if MODULE_USED[i] != 0 {
+                let len = MODULE_PATH_LENS[i] as usize;
+                if len == path.len() && &MODULE_PATHS[i][..len] == path {
+                    return Some(MODULE_IDS[i]);
+                }
+            }
+            i += 1;
+        }
+    }
+    None
+}
+
+fn module_forget(module_id: u32) {
+    if module_id == 0 {
+        return;
+    }
+    unsafe {
+        let mut i = 0usize;
+        while i < SHELL_FILE_MAX {
+            if MODULE_USED[i] != 0 && MODULE_IDS[i] == module_id {
+                MODULE_USED[i] = 0;
+                MODULE_IDS[i] = 0;
+                MODULE_PATH_LENS[i] = 0;
+                MODULE_PATHS[i][0] = 0;
+                return;
+            }
+            i += 1;
+        }
+    }
+}
+
+fn wq_demo_job(arg: usize) {
+    unsafe {
+        WQ_DEMO_HITS = WQ_DEMO_HITS.saturating_add(arg as u32);
+    }
+}
+
 fn shell_path_exists(path: &[u8]) -> bool {
     let mut c_path = [0u8; SHELL_PATH_MAX];
     let mut st = [0u64; 2];
@@ -355,6 +458,42 @@ fn shell_write_file(path: &[u8], content: &[u8], append: bool) -> bool {
     let _ = syscall_dispatch(SYSCALL_NR_CLOSE, fd as u64, 0, 0, 0);
     shell_track_file(path);
     true
+}
+
+fn build_test_shared_elf() -> [u8; 256] {
+    let mut image = [0u8; 256];
+    image[0] = 0x7F;
+    image[1] = b'E';
+    image[2] = b'L';
+    image[3] = b'F';
+    image[4] = 2;
+    image[5] = 1;
+    image[6] = 1;
+
+    image[16..18].copy_from_slice(&(3u16).to_le_bytes());
+    image[18..20].copy_from_slice(&(0x3Eu16).to_le_bytes());
+    image[20..24].copy_from_slice(&(1u32).to_le_bytes());
+    image[24..32].copy_from_slice(&(0x401000u64).to_le_bytes());
+    image[32..40].copy_from_slice(&(64u64).to_le_bytes());
+    image[52..54].copy_from_slice(&(64u16).to_le_bytes());
+    image[54..56].copy_from_slice(&(56u16).to_le_bytes());
+    image[56..58].copy_from_slice(&(1u16).to_le_bytes());
+
+    image[64..68].copy_from_slice(&(1u32).to_le_bytes());
+    image[68..72].copy_from_slice(&(5u32).to_le_bytes());
+    image[72..80].copy_from_slice(&(0u64).to_le_bytes());
+    image[80..88].copy_from_slice(&(0x400000u64).to_le_bytes());
+    image[88..96].copy_from_slice(&(0u64).to_le_bytes());
+    image[96..104].copy_from_slice(&(128u64).to_le_bytes());
+    image[104..112].copy_from_slice(&(128u64).to_le_bytes());
+    image[112..120].copy_from_slice(&(0x1000u64).to_le_bytes());
+    image
+}
+
+fn stage_test_module_artifacts() {
+    let image = build_test_shared_elf();
+    let _ = shell_write_file(b"/lib/libqos_test.so", &image, false);
+    let _ = shell_write_file(b"/lib/modules/qos_test.ko", &image, false);
 }
 
 fn shell_read_file(path: &[u8], out: &mut [u8; SHELL_IO_MAX]) -> Option<usize> {
@@ -498,7 +637,7 @@ fn shell_handle_line(line: &[u8]) -> bool {
     }
     if line == b"help" {
         uart_puts(
-            "qos-sh commands:\n  help\n  echo <text>\n  ps\n  ping <ip>\n  ip addr\n  ip route\n  wget <url>\n  ls\n  pwd\n  cat <path>\n  touch <path>\n  edit <path> [text]\n  exit\n",
+            "qos-sh commands:\n  help\n  echo <text>\n  ps\n  ping <ip>\n  ip addr\n  ip route\n  wget <url>\n  ls\n  pwd\n  cat <path>\n  touch <path>\n  edit <path> [text]\n  insmod <path>\n  rmmod <id|path>\n  wqdemo\n  exit\n",
         );
         return false;
     }
@@ -635,6 +774,78 @@ fn shell_handle_line(line: &[u8]) -> bool {
         }
         return false;
     }
+    if line == b"insmod" {
+        uart_puts("insmod: missing path\n");
+        return false;
+    }
+    if line.starts_with(b"insmod ") {
+        let path = trim_ascii_spaces(&line[7..]);
+        let mut c_path = [0u8; SHELL_PATH_MAX];
+        if path.is_empty() || !copy_cstr_path(&mut c_path, path) {
+            uart_puts("insmod: invalid path\n");
+        } else {
+            let image = build_test_shared_elf();
+            let _ = shell_write_file(path, &image, false);
+            let module_id = syscall_dispatch(SYSCALL_NR_MODLOAD, c_path.as_ptr() as u64, 0, 0, 0);
+            if module_id < 0 {
+                uart_puts("insmod: failed\n");
+            } else {
+                module_track(path, module_id as u32);
+                uart_puts("insmod: loaded id=");
+                uart_put_u32(module_id as u32);
+                uart_puts(" path=");
+                uart_put_bytes(path);
+                uart_puts("\n");
+            }
+        }
+        return false;
+    }
+    if line == b"rmmod" {
+        uart_puts("rmmod: missing id or path\n");
+        return false;
+    }
+    if line.starts_with(b"rmmod ") {
+        let arg = trim_ascii_spaces(&line[6..]);
+        let module_id = if let Some(id) = parse_u32_arg(arg) {
+            Some(id)
+        } else {
+            module_lookup_id(arg)
+        };
+        if let Some(module_id) = module_id {
+            if syscall_dispatch(SYSCALL_NR_MODUNLOAD, module_id as u64, 0, 0, 0) == 0 {
+                module_forget(module_id);
+                uart_puts("rmmod: unloaded id=");
+                uart_put_u32(module_id);
+                uart_puts("\n");
+            } else {
+                uart_puts("rmmod: failed\n");
+            }
+        } else {
+            uart_puts("rmmod: unknown module\n");
+        }
+        return false;
+    }
+    if line == b"wqdemo" {
+        unsafe {
+            WQ_DEMO_HITS = 0;
+        }
+        workqueue_reset();
+        if workqueue_enqueue(wq_demo_job, 1).is_none() || workqueue_enqueue(wq_demo_job, 2).is_none() {
+            uart_puts("wqdemo: enqueue failed\n");
+            return false;
+        }
+        let _ = softirq_run();
+        uart_puts("workqueue demo: pending=");
+        uart_put_u32(workqueue_pending_count());
+        uart_puts(" completed=");
+        uart_put_u32(workqueue_completed_count());
+        uart_puts(" hits=");
+        unsafe {
+            uart_put_u32(WQ_DEMO_HITS);
+        }
+        uart_puts("\n");
+        return false;
+    }
     uart_puts("unknown command: ");
     uart_put_bytes(line);
     uart_puts("\n");
@@ -679,6 +890,16 @@ fn run_serial_shell() -> ! {
 }
 
 fn run_init_process() -> ! {
+    unsafe {
+        SHELL_FILE_PATHS = [[0; SHELL_PATH_MAX]; SHELL_FILE_MAX];
+        SHELL_FILE_PATH_LENS = [0; SHELL_FILE_MAX];
+        SHELL_FILE_USED = [0; SHELL_FILE_MAX];
+        MODULE_PATHS = [[0; SHELL_PATH_MAX]; SHELL_FILE_MAX];
+        MODULE_PATH_LENS = [0; SHELL_FILE_MAX];
+        MODULE_USED = [0; SHELL_FILE_MAX];
+        MODULE_IDS = [0; SHELL_FILE_MAX];
+        WQ_DEMO_HITS = 0;
+    }
     let init_ok = proc_create(1, 0);
     let mut shell_ok = false;
     if init_ok {
@@ -694,6 +915,9 @@ fn run_init_process() -> ! {
     } else {
         uart_puts("init[1]: failed to exec /bin/sh\n");
     }
+    let _ = syscall_dispatch(SYSCALL_NR_MKDIR, b"/tmp\0".as_ptr() as u64, 0, 0, 0);
+    let _ = syscall_dispatch(SYSCALL_NR_MKDIR, b"/data\0".as_ptr() as u64, 0, 0, 0);
+    stage_test_module_artifacts();
     run_serial_shell();
 }
 

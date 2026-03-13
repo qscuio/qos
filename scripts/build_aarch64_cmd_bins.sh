@@ -12,7 +12,7 @@ src_dir="$root_dir/tools/aarch64-c-probe/cmd-src"
 cc="${AARCH64_CC:-aarch64-linux-gnu-gcc}"
 ld="${AARCH64_LD:-aarch64-linux-gnu-ld}"
 
-cmds=(echo ps ping ip wget ls cat touch edit)
+cmds=(echo ps ping ip wget ls cat touch edit insmod rmmod wqdemo)
 
 mkdir -p "$out_bin_dir"
 

@@ -15,6 +15,7 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ "$impl" == "rust" ]]; then
   cmd_bin_dir="$root_dir/rust-os/build/aarch64/rootfs/bin"
   "$root_dir/scripts/build_aarch64_cmd_bins.sh" "$cmd_bin_dir"
+  "$root_dir/scripts/build_test_modules.sh" aarch64 "$root_dir/rust-os/build/aarch64/rootfs"
   manifest="$root_dir/tools/aarch64-probe/Cargo.toml"
   linker="$root_dir/tools/aarch64-probe/linker.ld"
   target_dir="$root_dir/rust-os/target"
@@ -31,6 +32,7 @@ fi
 if [[ "$impl" == "c" ]]; then
   cmd_bin_dir="$root_dir/c-os/build/aarch64/rootfs/bin"
   "$root_dir/scripts/build_aarch64_cmd_bins.sh" "$cmd_bin_dir"
+  "$root_dir/scripts/build_test_modules.sh" aarch64 "$root_dir/c-os/build/aarch64/rootfs"
   probe_dir="$root_dir/tools/aarch64-c-probe"
   "$root_dir/scripts/build_aarch64_cmd_elves.sh" "$cmd_bin_dir" "$probe_dir/generated/cmd_elves.h"
   cc="${AARCH64_CC:-aarch64-linux-gnu-gcc}"
@@ -58,6 +60,7 @@ if [[ "$impl" == "c" ]]; then
     "$root_dir/c-os/kernel/irq/softirq.c"
     "$root_dir/c-os/kernel/timer/timer.c"
     "$root_dir/c-os/kernel/kthread/kthread.c"
+    "$root_dir/c-os/kernel/workqueue/workqueue.c"
     "$root_dir/c-os/kernel/mm/mm.c"
     "$root_dir/c-os/kernel/drivers/drivers.c"
     "$root_dir/c-os/kernel/fs/vfs.c"

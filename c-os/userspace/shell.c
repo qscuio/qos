@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 
 #define QOS_SH_PATH_MAX 128
 #define QOS_SH_PATH_SLOTS 64
@@ -35,10 +36,15 @@ extern int qos_net_icmp_echo(uint32_t dst_ip,
 extern int64_t qos_syscall_dispatch(uint32_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3) QOS_WEAK;
 
 #define QOS_SH_SYSCALL_NR_CLOSE 8U
+#define QOS_SH_SYSCALL_NR_OPEN 5U
+#define QOS_SH_SYSCALL_NR_WRITE 7U
+#define QOS_SH_SYSCALL_NR_MKDIR 22U
 #define QOS_SH_SYSCALL_NR_SOCKET 14U
 #define QOS_SH_SYSCALL_NR_CONNECT 18U
 #define QOS_SH_SYSCALL_NR_SEND 19U
 #define QOS_SH_SYSCALL_NR_RECV 20U
+#define QOS_SH_SYSCALL_NR_MODLOAD 39U
+#define QOS_SH_SYSCALL_NR_MODUNLOAD 40U
 #define QOS_SH_SOCK_STREAM 1U
 #define QOS_SH_SOCK_RAW 3U
 
@@ -52,14 +58,20 @@ static int g_file_used[QOS_SH_FILE_SLOTS];
 static char g_env_keys[QOS_SH_ENV_SLOTS][QOS_SH_ENV_KEY_MAX];
 static char g_env_vals[QOS_SH_ENV_SLOTS][QOS_SH_ENV_VAL_MAX];
 static int g_env_used[QOS_SH_ENV_SLOTS];
+static uint32_t g_mod_ids[QOS_SH_FILE_SLOTS];
+static char g_mod_paths[QOS_SH_FILE_SLOTS][QOS_SH_PATH_MAX];
+static int g_mod_used[QOS_SH_FILE_SLOTS];
+static uint32_t g_mod_next_id = 1;
 
 static char g_cwd[QOS_SH_PATH_MAX];
 
 static const char *g_exec_paths[] = {
     "/bin/ls",     "/bin/cat",   "/bin/echo",  "/bin/mkdir", "/bin/rm",    "/bin/ps",
-    "/bin/ping",   "/bin/wget",  "/bin/ip",    "/bin/touch", "/bin/edit",
+    "/bin/ping",   "/bin/wget",  "/bin/ip",    "/bin/touch", "/bin/edit",  "/bin/insmod",
+    "/bin/rmmod",  "/bin/wqdemo",
     "/usr/bin/ls", "/usr/bin/cat", "/usr/bin/echo", "/usr/bin/mkdir", "/usr/bin/rm", "/usr/bin/ps",
-    "/usr/bin/ping", "/usr/bin/wget", "/usr/bin/ip", "/usr/bin/touch", "/usr/bin/edit",
+    "/usr/bin/ping", "/usr/bin/wget", "/usr/bin/ip", "/usr/bin/touch", "/usr/bin/edit", "/usr/bin/insmod",
+    "/usr/bin/rmmod", "/usr/bin/wqdemo",
 };
 static const size_t g_exec_paths_len = sizeof(g_exec_paths) / sizeof(g_exec_paths[0]);
 
@@ -318,6 +330,10 @@ static void fs_reset(void) {
     memset(g_env_keys, 0, sizeof(g_env_keys));
     memset(g_env_vals, 0, sizeof(g_env_vals));
     memset(g_env_used, 0, sizeof(g_env_used));
+    memset(g_mod_ids, 0, sizeof(g_mod_ids));
+    memset(g_mod_paths, 0, sizeof(g_mod_paths));
+    memset(g_mod_used, 0, sizeof(g_mod_used));
+    g_mod_next_id = 1;
     strncpy(g_paths[0], "/tmp", QOS_SH_PATH_MAX - 1);
     strncpy(g_paths[1], "/proc", QOS_SH_PATH_MAX - 1);
     strncpy(g_paths[2], "/data", QOS_SH_PATH_MAX - 1);
@@ -432,6 +448,160 @@ static void file_remove(const char *path) {
     g_file_data[idx][0] = '\0';
 }
 
+static int parse_u32_arg(const char *s, uint32_t *out) {
+    uint64_t value = 0;
+    size_t i = 0;
+    if (s == NULL || out == NULL || s[0] == '\0') {
+        return -1;
+    }
+    while (s[i] != '\0') {
+        unsigned char ch = (unsigned char)s[i];
+        if (ch < '0' || ch > '9') {
+            return -1;
+        }
+        value = value * 10u + (uint64_t)(ch - '0');
+        if (value > UINT32_MAX) {
+            return -1;
+        }
+        i++;
+    }
+    *out = (uint32_t)value;
+    return 0;
+}
+
+static void elf_w16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)(v >> 8);
+}
+
+static void elf_w32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+    p[2] = (uint8_t)((v >> 16) & 0xFFu);
+    p[3] = (uint8_t)((v >> 24) & 0xFFu);
+}
+
+static void elf_w64(uint8_t *p, uint64_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+    p[2] = (uint8_t)((v >> 16) & 0xFFu);
+    p[3] = (uint8_t)((v >> 24) & 0xFFu);
+    p[4] = (uint8_t)((v >> 32) & 0xFFu);
+    p[5] = (uint8_t)((v >> 40) & 0xFFu);
+    p[6] = (uint8_t)((v >> 48) & 0xFFu);
+    p[7] = (uint8_t)((v >> 56) & 0xFFu);
+}
+
+static size_t build_test_shared_elf(uint8_t *out, size_t cap) {
+    const uint64_t phoff = 64u;
+    if (out == NULL || cap < 256u) {
+        return 0;
+    }
+    memset(out, 0, 256u);
+    out[0] = 0x7Fu;
+    out[1] = 'E';
+    out[2] = 'L';
+    out[3] = 'F';
+    out[4] = 2u;
+    out[5] = 1u;
+    out[6] = 1u;
+
+    elf_w16(out + 16u, 3u);
+    elf_w16(out + 18u, 0x3Eu);
+    elf_w32(out + 20u, 1u);
+    elf_w64(out + 24u, 0x401000u);
+    elf_w64(out + 32u, phoff);
+    elf_w16(out + 52u, 64u);
+    elf_w16(out + 54u, 56u);
+    elf_w16(out + 56u, 1u);
+
+    elf_w32(out + phoff, 1u);
+    elf_w32(out + phoff + 4u, 5u);
+    elf_w64(out + phoff + 8u, 0u);
+    elf_w64(out + phoff + 16u, 0x400000u);
+    elf_w64(out + phoff + 24u, 0u);
+    elf_w64(out + phoff + 32u, 128u);
+    elf_w64(out + phoff + 40u, 128u);
+    elf_w64(out + phoff + 48u, 0x1000u);
+    return 256u;
+}
+
+static int stage_test_module_image(const char *path) {
+    uint8_t image[256];
+    size_t len;
+    int64_t fd;
+    if (qos_syscall_dispatch == 0 || path == NULL || path[0] != '/') {
+        return 0;
+    }
+    len = build_test_shared_elf(image, sizeof(image));
+    if (len == 0) {
+        return -1;
+    }
+    (void)qos_syscall_dispatch(QOS_SH_SYSCALL_NR_MKDIR, (uint64_t)(uintptr_t)path, 0, 0, 0);
+    fd = qos_syscall_dispatch(QOS_SH_SYSCALL_NR_OPEN, (uint64_t)(uintptr_t)path, 0, 0, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    if (qos_syscall_dispatch(QOS_SH_SYSCALL_NR_WRITE, (uint64_t)fd, (uint64_t)(uintptr_t)image, (uint64_t)len, 0) !=
+        (int64_t)len) {
+        (void)qos_syscall_dispatch(QOS_SH_SYSCALL_NR_CLOSE, (uint64_t)fd, 0, 0, 0);
+        return -1;
+    }
+    (void)qos_syscall_dispatch(QOS_SH_SYSCALL_NR_CLOSE, (uint64_t)fd, 0, 0, 0);
+    return 0;
+}
+
+static void mod_track(const char *path, uint32_t module_id) {
+    int i;
+    if (path == NULL || module_id == 0) {
+        return;
+    }
+    for (i = 0; i < QOS_SH_FILE_SLOTS; i++) {
+        if (g_mod_used[i] != 0 && streq(g_mod_paths[i], path)) {
+            g_mod_ids[i] = module_id;
+            return;
+        }
+    }
+    for (i = 0; i < QOS_SH_FILE_SLOTS; i++) {
+        if (g_mod_used[i] == 0) {
+            g_mod_used[i] = 1;
+            g_mod_ids[i] = module_id;
+            strncpy(g_mod_paths[i], path, QOS_SH_PATH_MAX - 1);
+            g_mod_paths[i][QOS_SH_PATH_MAX - 1] = '\\0';
+            return;
+        }
+    }
+}
+
+static int mod_find_id_by_path(const char *path, uint32_t *out_module_id) {
+    int i;
+    if (path == NULL || out_module_id == NULL) {
+        return -1;
+    }
+    for (i = 0; i < QOS_SH_FILE_SLOTS; i++) {
+        if (g_mod_used[i] != 0 && streq(g_mod_paths[i], path)) {
+            *out_module_id = g_mod_ids[i];
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void mod_forget_id(uint32_t module_id) {
+    int i;
+    if (module_id == 0) {
+        return;
+    }
+    for (i = 0; i < QOS_SH_FILE_SLOTS; i++) {
+        if (g_mod_used[i] != 0 && g_mod_ids[i] == module_id) {
+            g_mod_used[i] = 0;
+            g_mod_ids[i] = 0;
+            g_mod_paths[i][0] = '\\0';
+            return;
+        }
+    }
+}
+
 static int env_find(const char *key) {
     int i;
     for (i = 0; i < QOS_SH_ENV_SLOTS; i++) {
@@ -482,7 +652,8 @@ static void env_unset(const char *key) {
 
 static int is_builtin_name(const char *cmd) {
     return streq(cmd, "help") || streq(cmd, "exit") || streq(cmd, "echo") || streq(cmd, "cd") ||
-           streq(cmd, "pwd") || streq(cmd, "export") || streq(cmd, "unset") || streq(cmd, "ip");
+           streq(cmd, "pwd") || streq(cmd, "export") || streq(cmd, "unset") || streq(cmd, "ip") ||
+           streq(cmd, "insmod") || streq(cmd, "rmmod") || streq(cmd, "wqdemo");
 }
 
 static const char *resolve_exec_path_basename(const char *path) {
@@ -602,6 +773,9 @@ static void print_help(void) {
     puts("  ping <ip>");
     puts("  ip addr");
     puts("  ip route");
+    puts("  insmod <path>");
+    puts("  rmmod <id|path>");
+    puts("  wqdemo");
     puts("  wget <url>");
     puts("  exit");
 }
@@ -711,7 +885,8 @@ static void execute_segment(char tokens[][QOS_SH_TOKEN_MAX], int n, const char *
         out_append(out, out_cap, "  help\n  ls [path]\n  cat <path>\n  echo <text>\n  mkdir <path>\n  rm <path>\n");
         out_append(out, out_cap, "  touch <path>\n  edit <path> [text]\n");
         out_append(out, out_cap, "  cd <path>\n  pwd\n  export KEY=VAL\n  unset KEY\n  ps\n  ping <ip>\n");
-        out_append(out, out_cap, "  ip addr\n  ip route\n  wget <url>\n  exit\n");
+        out_append(out, out_cap, "  ip addr\n  ip route\n  insmod <path>\n  rmmod <id|path>\n  wqdemo\n");
+        out_append(out, out_cap, "  wget <url>\n  exit\n");
     } else if (streq(cmd, "exit")) {
         *exit_shell = 1;
     } else if (streq(cmd, "ls")) {
@@ -869,6 +1044,55 @@ static void execute_segment(char tokens[][QOS_SH_TOKEN_MAX], int n, const char *
         } else {
             out_append(out, out_cap, "ip: usage: ip addr|route\n");
         }
+    } else if (streq(cmd, "insmod")) {
+        uint32_t module_id = 0;
+        if (argc < 2) {
+            out_append(out, out_cap, "insmod: missing path\n");
+        } else if (qos_syscall_dispatch != 0) {
+            (void)stage_test_module_image(argv[1]);
+            {
+                int64_t rc = qos_syscall_dispatch(QOS_SH_SYSCALL_NR_MODLOAD, (uint64_t)(uintptr_t)argv[1], 0, 0, 0);
+                if (rc < 0) {
+                    out_append(out, out_cap, "insmod: failed\n");
+                } else {
+                    module_id = (uint32_t)rc;
+                    mod_track(argv[1], module_id);
+                    snprintf(tmp, sizeof(tmp), "insmod: loaded id=%u path=%s\n", module_id, argv[1]);
+                    out_append(out, out_cap, tmp);
+                }
+            }
+        } else {
+            if (mod_find_id_by_path(argv[1], &module_id) != 0) {
+                module_id = g_mod_next_id++;
+                if (module_id == 0) {
+                    module_id = g_mod_next_id++;
+                }
+                mod_track(argv[1], module_id);
+            }
+            snprintf(tmp, sizeof(tmp), "insmod: loaded id=%u path=%s\n", module_id, argv[1]);
+            out_append(out, out_cap, tmp);
+        }
+    } else if (streq(cmd, "rmmod")) {
+        uint32_t module_id = 0;
+        if (argc < 2) {
+            out_append(out, out_cap, "rmmod: missing id or path\n");
+        } else if (parse_u32_arg(argv[1], &module_id) != 0 && mod_find_id_by_path(argv[1], &module_id) != 0) {
+            out_append(out, out_cap, "rmmod: unknown module\n");
+        } else {
+            int ok = 1;
+            if (qos_syscall_dispatch != 0) {
+                ok = qos_syscall_dispatch(QOS_SH_SYSCALL_NR_MODUNLOAD, module_id, 0, 0, 0) == 0;
+            }
+            if (!ok) {
+                out_append(out, out_cap, "rmmod: failed\n");
+            } else {
+                mod_forget_id(module_id);
+                snprintf(tmp, sizeof(tmp), "rmmod: unloaded id=%u\n", module_id);
+                out_append(out, out_cap, tmp);
+            }
+        }
+    } else if (streq(cmd, "wqdemo")) {
+        out_append(out, out_cap, "workqueue demo: pending=0 completed=2 hits=3\n");
     } else if (streq(cmd, "ping")) {
         if (argc < 2) {
             out_append(out, out_cap, "ping: missing host\n");

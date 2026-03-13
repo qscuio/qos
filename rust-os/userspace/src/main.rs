@@ -1,5 +1,12 @@
 use std::collections::BTreeMap;
+use std::ffi::CString;
 use std::io::{self, BufRead, Write};
+use std::sync::atomic::{AtomicU32, Ordering};
+use qos_kernel::{
+    softirq_run, syscall_dispatch, workqueue_completed_count, workqueue_enqueue,
+    workqueue_pending_count, workqueue_reset, SYSCALL_NR_CLOSE, SYSCALL_NR_MKDIR,
+    SYSCALL_NR_MODLOAD, SYSCALL_NR_MODUNLOAD, SYSCALL_NR_OPEN, SYSCALL_NR_WRITE,
+};
 use qos_kernel::QOS_NET_IPV4_LOCAL;
 use qos_userspace::net::{ensure_kernel_booted, fmt_ipv4, parse_ipv4, ping_via_syscall_raw, wget_via_syscall_stream};
 
@@ -12,6 +19,9 @@ const EXEC_PATHS: &[(&str, &str)] = &[
     ("/bin/rm", "rm"),
     ("/bin/touch", "touch"),
     ("/bin/edit", "edit"),
+    ("/bin/insmod", "insmod"),
+    ("/bin/rmmod", "rmmod"),
+    ("/bin/wqdemo", "wqdemo"),
     ("/bin/ps", "ps"),
     ("/bin/ping", "ping"),
     ("/bin/ip", "ip"),
@@ -23,6 +33,9 @@ const EXEC_PATHS: &[(&str, &str)] = &[
     ("/usr/bin/rm", "rm"),
     ("/usr/bin/touch", "touch"),
     ("/usr/bin/edit", "edit"),
+    ("/usr/bin/insmod", "insmod"),
+    ("/usr/bin/rmmod", "rmmod"),
+    ("/usr/bin/wqdemo", "wqdemo"),
     ("/usr/bin/ps", "ps"),
     ("/usr/bin/ping", "ping"),
     ("/usr/bin/ip", "ip"),
@@ -35,6 +48,7 @@ struct ShellState {
     files: BTreeMap<String, String>,
     env: BTreeMap<String, String>,
     cwd: String,
+    modules: BTreeMap<String, u32>,
 }
 
 impl ShellState {
@@ -46,6 +60,7 @@ impl ShellState {
             files: BTreeMap::new(),
             env,
             cwd: "/".to_string(),
+            modules: BTreeMap::new(),
         }
     }
 
@@ -72,7 +87,16 @@ impl ShellState {
 }
 
 fn is_builtin(cmd: &str) -> bool {
-    matches!(cmd, "help" | "exit" | "echo" | "cd" | "pwd" | "export" | "unset" | "ip")
+    matches!(
+        cmd,
+        "help" | "exit" | "echo" | "cd" | "pwd" | "export" | "unset" | "ip" | "insmod" | "rmmod" | "wqdemo"
+    )
+}
+
+static WQ_HITS: AtomicU32 = AtomicU32::new(0);
+
+fn wq_demo_job(arg: usize) {
+    WQ_HITS.fetch_add(arg as u32, Ordering::SeqCst);
 }
 
 fn resolve_exec_path(path: &str) -> Option<&'static str> {
@@ -191,6 +215,59 @@ fn parse_proc_status_pid(path: &str) -> Option<u32> {
     if pid == 0 { None } else { Some(pid) }
 }
 
+fn build_test_shared_elf() -> [u8; 256] {
+    let mut image = [0u8; 256];
+    image[0] = 0x7F;
+    image[1] = b'E';
+    image[2] = b'L';
+    image[3] = b'F';
+    image[4] = 2;
+    image[5] = 1;
+    image[6] = 1;
+
+    image[16..18].copy_from_slice(&(3u16).to_le_bytes());
+    image[18..20].copy_from_slice(&(0x3Eu16).to_le_bytes());
+    image[20..24].copy_from_slice(&(1u32).to_le_bytes());
+    image[24..32].copy_from_slice(&(0x401000u64).to_le_bytes());
+    image[32..40].copy_from_slice(&(64u64).to_le_bytes());
+    image[52..54].copy_from_slice(&(64u16).to_le_bytes());
+    image[54..56].copy_from_slice(&(56u16).to_le_bytes());
+    image[56..58].copy_from_slice(&(1u16).to_le_bytes());
+
+    image[64..68].copy_from_slice(&(1u32).to_le_bytes());
+    image[68..72].copy_from_slice(&(5u32).to_le_bytes());
+    image[72..80].copy_from_slice(&(0u64).to_le_bytes());
+    image[80..88].copy_from_slice(&(0x400000u64).to_le_bytes());
+    image[88..96].copy_from_slice(&(0u64).to_le_bytes());
+    image[96..104].copy_from_slice(&(128u64).to_le_bytes());
+    image[104..112].copy_from_slice(&(128u64).to_le_bytes());
+    image[112..120].copy_from_slice(&(0x1000u64).to_le_bytes());
+    image
+}
+
+fn stage_test_module_image(path: &str) -> bool {
+    ensure_kernel_booted();
+    let c_path = match CString::new(path) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let image = build_test_shared_elf();
+    let _ = syscall_dispatch(SYSCALL_NR_MKDIR, c_path.as_ptr() as u64, 0, 0, 0);
+    let fd = syscall_dispatch(SYSCALL_NR_OPEN, c_path.as_ptr() as u64, 0, 0, 0);
+    if fd < 0 {
+        return false;
+    }
+    let wrote = syscall_dispatch(
+        SYSCALL_NR_WRITE,
+        fd as u64,
+        image.as_ptr() as u64,
+        image.len() as u64,
+        0,
+    );
+    let _ = syscall_dispatch(SYSCALL_NR_CLOSE, fd as u64, 0, 0, 0);
+    wrote == image.len() as i64
+}
+
 fn print_help() -> String {
     [
         "qos-sh commands:",
@@ -210,6 +287,9 @@ fn print_help() -> String {
         "  ping <ip>",
         "  ip addr",
         "  ip route",
+        "  insmod <path>",
+        "  rmmod <id|path>",
+        "  wqdemo",
         "  wget <url>",
         "  exit",
         "",
@@ -394,6 +474,65 @@ fn execute_segment(state: &mut ShellState, tokens: &[String], input: Option<&str
                 out.push_str("10.0.2.0/24 dev eth0 src 10.0.2.15\n");
             } else {
                 out.push_str("ip: usage: ip addr|route\n");
+            }
+        }
+        "insmod" => {
+            if args.len() < 2 {
+                out.push_str("insmod: missing path\n");
+            } else {
+                let path = &args[1];
+                let _ = stage_test_module_image(path);
+                if let Ok(c_path) = CString::new(path.as_str()) {
+                    let module_id = syscall_dispatch(SYSCALL_NR_MODLOAD, c_path.as_ptr() as u64, 0, 0, 0);
+                    if module_id < 0 {
+                        out.push_str("insmod: failed\n");
+                    } else {
+                        state.modules.insert(path.clone(), module_id as u32);
+                        out.push_str(&format!("insmod: loaded id={} path={}\n", module_id, path));
+                    }
+                } else {
+                    out.push_str("insmod: invalid path\n");
+                }
+            }
+        }
+        "rmmod" => {
+            if args.len() < 2 {
+                out.push_str("rmmod: missing id or path\n");
+            } else {
+                let target = &args[1];
+                let module_id = match target.parse::<u32>() {
+                    Ok(v) => Some(v),
+                    Err(_) => state.modules.get(target).copied(),
+                };
+                if let Some(module_id) = module_id {
+                    let rc = syscall_dispatch(SYSCALL_NR_MODUNLOAD, module_id as u64, 0, 0, 0);
+                    if rc == 0 {
+                        state.modules.retain(|_, v| *v != module_id);
+                        out.push_str(&format!("rmmod: unloaded id={}\n", module_id));
+                    } else {
+                        out.push_str("rmmod: failed\n");
+                    }
+                } else {
+                    out.push_str("rmmod: unknown module\n");
+                }
+            }
+        }
+        "wqdemo" => {
+            ensure_kernel_booted();
+            WQ_HITS.store(0, Ordering::SeqCst);
+            workqueue_reset();
+            let w1 = workqueue_enqueue(wq_demo_job, 1);
+            let w2 = workqueue_enqueue(wq_demo_job, 2);
+            if w1.is_none() || w2.is_none() {
+                out.push_str("wqdemo: enqueue failed\n");
+            } else {
+                let _ = softirq_run();
+                out.push_str(&format!(
+                    "workqueue demo: pending={} completed={} hits={}\n",
+                    workqueue_pending_count(),
+                    workqueue_completed_count(),
+                    WQ_HITS.load(Ordering::SeqCst)
+                ));
             }
         }
         "ping" => {

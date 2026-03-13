@@ -44,6 +44,7 @@ static SOFTIRQ_LOCK: AtomicBool = AtomicBool::new(false);
 static TIMER_LOCK: AtomicBool = AtomicBool::new(false);
 static KTHREAD_LOCK: AtomicBool = AtomicBool::new(false);
 static NAPI_LOCK: AtomicBool = AtomicBool::new(false);
+static WORKQUEUE_LOCK: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelError {
@@ -135,9 +136,11 @@ pub const QOS_WAIT_WNOHANG: u32 = 1;
 pub const QOS_SOFTIRQ_MAX: usize = 8;
 pub const QOS_SOFTIRQ_TIMER: u32 = 0;
 pub const QOS_SOFTIRQ_NET_RX: u32 = 1;
+pub const QOS_SOFTIRQ_WORKQUEUE: u32 = 2;
 pub const QOS_TIMER_MAX: usize = 128;
 pub const QOS_KTHREAD_MAX: usize = 64;
 pub const QOS_NAPI_MAX: usize = 32;
+pub const QOS_WORKQUEUE_MAX: usize = 128;
 
 pub const QOS_SIG_DFL: u32 = 0;
 pub const QOS_SIG_IGN: u32 = 1;
@@ -313,6 +316,7 @@ type SoftirqHandler = fn(usize);
 type TimerCallback = fn(usize);
 type KthreadFn = fn(usize);
 type NapiPoll = fn(usize, u32) -> u32;
+type WorkqueueFn = fn(usize);
 
 #[derive(Clone, Copy)]
 struct SchedState {
@@ -831,6 +835,58 @@ unsafe impl Sync for NapiCell {}
 
 static NAPI: NapiCell = NapiCell(UnsafeCell::new(NapiState::new()));
 
+#[derive(Clone, Copy)]
+struct WorkqueueEntry {
+    used: u8,
+    pending: u8,
+    id: u32,
+    work: Option<WorkqueueFn>,
+    arg: usize,
+}
+
+impl WorkqueueEntry {
+    const fn new() -> Self {
+        Self {
+            used: 0,
+            pending: 0,
+            id: 0,
+            work: None,
+            arg: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WorkqueueState {
+    entries: [WorkqueueEntry; QOS_WORKQUEUE_MAX],
+    queue: [u16; QOS_WORKQUEUE_MAX],
+    qhead: u16,
+    qtail: u16,
+    qcount: u16,
+    next_id: u32,
+    completed: u32,
+}
+
+impl WorkqueueState {
+    const fn new() -> Self {
+        Self {
+            entries: [WorkqueueEntry::new(); QOS_WORKQUEUE_MAX],
+            queue: [0; QOS_WORKQUEUE_MAX],
+            qhead: 0,
+            qtail: 0,
+            qcount: 0,
+            next_id: 1,
+            completed: 0,
+        }
+    }
+}
+
+struct WorkqueueCell(UnsafeCell<WorkqueueState>);
+
+unsafe impl Sync for WorkqueueCell {}
+
+static WORKQUEUE: WorkqueueCell = WorkqueueCell(UnsafeCell::new(WorkqueueState::new()));
+
 fn pmm_state_mut() -> &'static mut PmmState {
     unsafe { &mut *PMM.0.get() }
 }
@@ -925,6 +981,14 @@ fn napi_state_mut() -> &'static mut NapiState {
 
 fn napi_state() -> &'static NapiState {
     unsafe { &*NAPI.0.get() }
+}
+
+fn workqueue_state_mut() -> &'static mut WorkqueueState {
+    unsafe { &mut *WORKQUEUE.0.get() }
+}
+
+fn workqueue_state() -> &'static WorkqueueState {
+    unsafe { &*WORKQUEUE.0.get() }
 }
 
 fn mm_lock() {
@@ -1070,6 +1134,19 @@ fn napi_unlock() {
     NAPI_LOCK.store(false, Ordering::Release);
 }
 
+fn workqueue_lock() {
+    while WORKQUEUE_LOCK
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        spin_loop();
+    }
+}
+
+fn workqueue_unlock() {
+    WORKQUEUE_LOCK.store(false, Ordering::Release);
+}
+
 fn align_up(value: u64) -> u64 {
     (value + (QOS_PAGE_SIZE - 1)) & !(QOS_PAGE_SIZE - 1)
 }
@@ -1121,6 +1198,11 @@ pub fn napi_init() {
 
 pub fn kthread_init() {
     kthread_reset();
+}
+
+pub fn workqueue_init() {
+    workqueue_reset();
+    let _ = softirq_register(QOS_SOFTIRQ_WORKQUEUE, workqueue_softirq_handler, 0);
 }
 
 fn sched_init() {
@@ -2906,6 +2988,163 @@ pub fn napi_run_count(napi_id: u32) -> u32 {
         }
     };
     napi_unlock();
+    count
+}
+
+fn workqueue_find_slot_by_id(state: &WorkqueueState, work_id: u32) -> Option<usize> {
+    let mut i = 0usize;
+    while i < QOS_WORKQUEUE_MAX {
+        let entry = &state.entries[i];
+        if entry.used != 0 && entry.id == work_id {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn workqueue_queue_push(state: &mut WorkqueueState, slot: u16) -> bool {
+    if state.qcount as usize >= QOS_WORKQUEUE_MAX {
+        return false;
+    }
+    state.queue[state.qtail as usize] = slot;
+    state.qtail = ((state.qtail as usize + 1) % QOS_WORKQUEUE_MAX) as u16;
+    state.qcount += 1;
+    true
+}
+
+fn workqueue_queue_pop(state: &mut WorkqueueState) -> Option<u16> {
+    if state.qcount == 0 {
+        return None;
+    }
+    let slot = state.queue[state.qhead as usize];
+    state.qhead = ((state.qhead as usize + 1) % QOS_WORKQUEUE_MAX) as u16;
+    state.qcount -= 1;
+    Some(slot)
+}
+
+fn workqueue_softirq_handler(_ctx: usize) {
+    loop {
+        let task = {
+            workqueue_lock();
+            let state = workqueue_state_mut();
+            let slot = match workqueue_queue_pop(state) {
+                Some(v) => v as usize,
+                None => {
+                    workqueue_unlock();
+                    return;
+                }
+            };
+            if slot >= QOS_WORKQUEUE_MAX {
+                workqueue_unlock();
+                continue;
+            }
+            let entry = &mut state.entries[slot];
+            if entry.used == 0 || entry.pending == 0 {
+                *entry = WorkqueueEntry::new();
+                workqueue_unlock();
+                continue;
+            }
+            let work = match entry.work {
+                Some(v) => v,
+                None => {
+                    *entry = WorkqueueEntry::new();
+                    workqueue_unlock();
+                    continue;
+                }
+            };
+            let arg = entry.arg;
+            *entry = WorkqueueEntry::new();
+            state.completed = state.completed.saturating_add(1);
+            workqueue_unlock();
+            (work, arg)
+        };
+        task.0(task.1);
+    }
+}
+
+pub fn workqueue_reset() {
+    workqueue_lock();
+    *workqueue_state_mut() = WorkqueueState::new();
+    workqueue_unlock();
+}
+
+pub fn workqueue_enqueue(work: WorkqueueFn, arg: usize) -> Option<u32> {
+    let work_id = {
+        workqueue_lock();
+        let state = workqueue_state_mut();
+        let mut i = 0usize;
+        let mut out = None;
+        while i < QOS_WORKQUEUE_MAX {
+            if state.entries[i].used == 0 {
+                let mut id = state.next_id;
+                state.next_id = state.next_id.wrapping_add(1);
+                if id == 0 {
+                    id = state.next_id;
+                    state.next_id = state.next_id.wrapping_add(1);
+                }
+                state.entries[i].used = 1;
+                state.entries[i].pending = 1;
+                state.entries[i].id = id;
+                state.entries[i].work = Some(work);
+                state.entries[i].arg = arg;
+                if !workqueue_queue_push(state, i as u16) {
+                    state.entries[i] = WorkqueueEntry::new();
+                    out = None;
+                } else {
+                    out = Some(id);
+                }
+                break;
+            }
+            i += 1;
+        }
+        workqueue_unlock();
+        out
+    }?;
+    let _ = softirq_raise(QOS_SOFTIRQ_WORKQUEUE);
+    Some(work_id)
+}
+
+pub fn workqueue_cancel(work_id: u32) -> bool {
+    if work_id == 0 {
+        return false;
+    }
+    workqueue_lock();
+    let ok = {
+        let state = workqueue_state_mut();
+        if let Some(slot) = workqueue_find_slot_by_id(state, work_id) {
+            state.entries[slot] = WorkqueueEntry::new();
+            true
+        } else {
+            false
+        }
+    };
+    workqueue_unlock();
+    ok
+}
+
+pub fn workqueue_pending_count() -> u32 {
+    workqueue_lock();
+    let count = {
+        let state = workqueue_state();
+        let mut i = 0usize;
+        let mut n = 0u32;
+        while i < QOS_WORKQUEUE_MAX {
+            if state.entries[i].used != 0 && state.entries[i].pending != 0 {
+                n = n.saturating_add(1);
+            }
+            i += 1;
+        }
+        n
+    };
+    workqueue_unlock();
+    count
+}
+
+pub fn workqueue_completed_count() -> u32 {
+    workqueue_lock();
+    let count = workqueue_state().completed;
+    workqueue_unlock();
     count
 }
 
@@ -6119,6 +6358,7 @@ pub fn kernel_entry(boot_info: &BootInfo) -> Result<(), KernelError> {
     timer_init();
     napi_init();
     kthread_init();
+    workqueue_init();
     sched_init();
     syscall_init();
     proc_init();

@@ -38,6 +38,9 @@ def test_aarch64_c_guest_shell_supports_touch_edit_and_redirection() -> None:
             "cat < /tmp/msg",
             "cat /proc/kernel/status",
             "cat /proc/syscalls",
+            "insmod /lib/modules/qos_test.ko",
+            "rmmod /lib/modules/qos_test.ko",
+            "wqdemo",
             "exit",
             "",
         ]
@@ -60,6 +63,10 @@ def test_aarch64_c_guest_shell_supports_touch_edit_and_redirection() -> None:
     assert "hello" in text, text
     assert "InitState:" in text, text
     assert "SyscallCount:" in text, text
+    assert "insmod: loaded id=" in text, text
+    assert "path=/lib/modules/qos_test.ko" in text, text
+    assert "rmmod: unloaded id=" in text, text
+    assert "workqueue demo: pending=0 completed=2 hits=3" in text, text
 
 
 def test_aarch64_rust_guest_shell_supports_ls_pwd_cat_touch_and_edit() -> None:
@@ -92,6 +99,9 @@ def test_aarch64_rust_guest_shell_supports_ls_pwd_cat_touch_and_edit() -> None:
             "cat /tmp/rnote",
             "cat /proc/kernel/status",
             "cat /proc/syscalls",
+            "insmod /lib/modules/qos_test.ko",
+            "rmmod /lib/modules/qos_test.ko",
+            "wqdemo",
             "exit",
             "",
         ]
@@ -113,3 +123,7 @@ def test_aarch64_rust_guest_shell_supports_ls_pwd_cat_touch_and_edit() -> None:
     assert "hello-rust" in text, text
     assert "InitState:" in text, text
     assert "SyscallCount:" in text, text
+    assert "insmod: loaded id=" in text, text
+    assert "path=/lib/modules/qos_test.ko" in text, text
+    assert "rmmod: unloaded id=" in text, text
+    assert "workqueue demo: pending=0 completed=2 hits=3" in text, text

@@ -2,8 +2,9 @@ use qos_kernel::{
     kthread_count, kthread_create, kthread_reset, kthread_run_count, kthread_run_next, kthread_stop,
     kthread_wake, napi_complete, napi_init, napi_pending_count, napi_register, napi_reset,
     napi_run_count, napi_schedule, softirq_pending_mask, softirq_raise, softirq_register, softirq_reset,
-    softirq_run, timer_active_count, timer_add, timer_cancel, timer_init, timer_pending_count, timer_reset,
-    timer_tick,
+    softirq_run, timer_active_count, timer_add, timer_cancel, timer_init, timer_pending_count,
+    timer_reset, timer_tick, workqueue_cancel, workqueue_completed_count, workqueue_enqueue,
+    workqueue_init, workqueue_pending_count, workqueue_reset,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -19,6 +20,7 @@ static KT1_HITS: AtomicU32 = AtomicU32::new(0);
 static KT2_HITS: AtomicU32 = AtomicU32::new(0);
 static NAPI_CALLS: AtomicU32 = AtomicU32::new(0);
 static NAPI_MODE: AtomicU32 = AtomicU32::new(0);
+static WQ_HITS: AtomicU32 = AtomicU32::new(0);
 
 fn softirq_cb(ctx: usize) {
     SOFTIRQ_HITS.fetch_add(ctx as u32, Ordering::SeqCst);
@@ -45,6 +47,10 @@ fn napi_poll(_ctx: usize, budget: u32) -> u32 {
     } else {
         mode
     }
+}
+
+fn workqueue_job(arg: usize) {
+    WQ_HITS.fetch_add(arg as u32, Ordering::SeqCst);
 }
 
 #[test]
@@ -159,4 +165,30 @@ fn napi_schedule_poll_reschedule_and_complete() {
     assert_eq!(napi_pending_count(), 0);
     assert!(napi_complete(napi_id));
     assert!(!napi_schedule(0));
+}
+
+#[test]
+fn workqueue_enqueue_cancel_and_drain() {
+    let _guard = test_guard();
+    WQ_HITS.store(0, Ordering::SeqCst);
+
+    softirq_reset();
+    workqueue_reset();
+    workqueue_init();
+
+    let w1 = workqueue_enqueue(workqueue_job, 1).expect("w1");
+    let w2 = workqueue_enqueue(workqueue_job, 2).expect("w2");
+    assert_ne!(w1, w2);
+    assert_eq!(workqueue_pending_count(), 2);
+    assert_eq!(workqueue_completed_count(), 0);
+    assert!(softirq_pending_mask() & (1 << 2) != 0);
+
+    assert!(workqueue_cancel(w1));
+    assert_eq!(workqueue_pending_count(), 1);
+
+    assert!(softirq_run() >= 1);
+    assert_eq!(WQ_HITS.load(Ordering::SeqCst), 2);
+    assert_eq!(workqueue_pending_count(), 0);
+    assert_eq!(workqueue_completed_count(), 1);
+    assert!(!workqueue_cancel(w1));
 }
