@@ -68,11 +68,13 @@ def test_smoke_logs_include_stage_and_handoff_markers() -> None:
             "abi=x0",
             "dtb_addr_nonzero=1",
             "dtb_magic=ok",
+            "dtb_handoff=",
             "mmap_source=dtb",
             "mmap_count=",
             "mmap_len_nonzero=1",
             "initramfs_source=dtb",
             "initramfs_size_nonzero=1",
+            "irq_timer=ok",
             "icmp_echo=gateway_ok",
             "net_tx=real_ok",
         ),
@@ -82,11 +84,13 @@ def test_smoke_logs_include_stage_and_handoff_markers() -> None:
             "abi=x0",
             "dtb_addr_nonzero=1",
             "dtb_magic=ok",
+            "dtb_handoff=",
             "mmap_source=dtb",
             "mmap_count=",
             "mmap_len_nonzero=1",
             "initramfs_source=dtb",
             "initramfs_size_nonzero=1",
+            "irq_timer=ok",
             "icmp_echo=gateway_ok",
             "net_tx=real_ok",
         ),
@@ -110,3 +114,5 @@ def test_smoke_logs_include_stage_and_handoff_markers() -> None:
             assert match, f"missing decimal mmap_count in {log}\n{text}"
             count = int(match.group(1))
             assert count >= 3, f"expected mmap_count >= 3 in {log}, got {count}\n{text}"
+            dtb_handoff = re.search(r"dtb_handoff=(x0|scan|fallback)", text)
+            assert dtb_handoff, f"expected dtb_handoff=(x0|scan|fallback) in {log}\n{text}"

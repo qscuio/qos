@@ -121,6 +121,21 @@ const FAKE_DTB_STR_OFF_INITRD_END: u32 = 62;
 const RAM_SCAN_BASE: u64 = 0x4000_0000;
 const RAM_SCAN_END: u64 = 0x5000_0000;
 const RAM_SCAN_STEP: u64 = 0x1000;
+const GICD_BASE: usize = 0x0800_0000;
+const GICC_BASE: usize = 0x0801_0000;
+const GICD_CTLR: usize = 0x000;
+const GICD_IGROUPR0: usize = 0x080;
+const GICD_ISENABLER0: usize = 0x100;
+const GICD_ICENABLER0: usize = 0x180;
+const GICD_ICPENDR0: usize = 0x280;
+const GICD_IPRIORITYR: usize = 0x400;
+const GICC_CTLR: usize = 0x000;
+const GICC_PMR: usize = 0x004;
+const GICC_IAR: usize = 0x00C;
+const GICC_EOIR: usize = 0x010;
+const GIC_IRQ_TIMER_PPI: u32 = 30;
+const GIC_IRQ_SPURIOUS: u32 = 1023;
+const IRQ_TIMER_PROBE_SPINS: u32 = 5_000_000;
 
 #[no_mangle]
 static mut SHELL_FILE_PATHS: [[u8; SHELL_PATH_MAX]; SHELL_FILE_MAX] = [[0; SHELL_PATH_MAX]; SHELL_FILE_MAX];
@@ -204,9 +219,14 @@ static mut QOS_FAKE_DTB: FakeDtb = FakeDtb {
 static mut QOS_FAKE_DTB_READY: bool = false;
 
 unsafe extern "C" {
+    static qos_vector_table: u8;
     static __kernel_phys_start: u8;
     static __kernel_phys_end: u8;
 }
+
+static mut IRQ_LAST: u32 = GIC_IRQ_SPURIOUS;
+static mut IRQ_TIMER_HITS: u32 = 0;
+static mut IRQ_TIMER_RELOAD_TICKS: u32 = 1_000_000;
 
 global_asm!(
     r#"
@@ -288,6 +308,63 @@ _start:
 3:
     wfe
     b 3b
+
+    .section .text.vectors,"ax"
+    .balign 2048
+    .global qos_vector_table
+qos_vector_table:
+    .macro VECTOR_BRANCH target
+    b \target
+    .space 124
+    .endm
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_irq_el1h
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+    VECTOR_BRANCH qos_vector_default
+
+qos_vector_irq_el1h:
+    sub sp, sp, #160
+    stp x0, x1, [sp, #0]
+    stp x2, x3, [sp, #16]
+    stp x4, x5, [sp, #32]
+    stp x6, x7, [sp, #48]
+    stp x8, x9, [sp, #64]
+    stp x10, x11, [sp, #80]
+    stp x12, x13, [sp, #96]
+    stp x14, x15, [sp, #112]
+    stp x16, x17, [sp, #128]
+    str x18, [sp, #144]
+    str x30, [sp, #152]
+    bl qos_irq_dispatch
+    ldr x30, [sp, #152]
+    ldr x18, [sp, #144]
+    ldp x16, x17, [sp, #128]
+    ldp x14, x15, [sp, #112]
+    ldp x12, x13, [sp, #96]
+    ldp x10, x11, [sp, #80]
+    ldp x8, x9, [sp, #64]
+    ldp x6, x7, [sp, #48]
+    ldp x4, x5, [sp, #32]
+    ldp x2, x3, [sp, #16]
+    ldp x0, x1, [sp, #0]
+    add sp, sp, #160
+    eret
+
+qos_vector_default:
+    wfe
+    b qos_vector_default
 
     .section .bss.qos_boot,"aw",%nobits
     .balign 4096
@@ -1740,6 +1817,8 @@ fn emit_boot_marker_prefix(
     mmap_len_nonzero: bool,
     initramfs_source: &str,
     initramfs_size_nonzero: bool,
+    dtb_handoff: &str,
+    irq_timer: &str,
 ) {
     uart_puts("QOS kernel started impl=rust arch=aarch64 handoff=boot_info entry=kernel_main abi=x0 dtb_addr_nonzero=1 dtb_magic=ok mmap_source=");
     uart_puts(mmap_source);
@@ -1751,7 +1830,11 @@ fn emit_boot_marker_prefix(
     uart_puts(initramfs_source);
     uart_puts(" initramfs_size_nonzero=");
     uart_put_u32(if initramfs_size_nonzero { 1 } else { 0 });
-    uart_puts(" el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb ");
+    uart_puts(" dtb_handoff=");
+    uart_puts(dtb_handoff);
+    uart_puts(" el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb irq_timer=");
+    uart_puts(irq_timer);
+    uart_puts(" ");
 }
 
 fn mmio_read32(base: usize, off: usize) -> u32 {
@@ -1762,6 +1845,148 @@ fn mmio_write32(base: usize, off: usize, value: u32) {
     unsafe {
         write_volatile((base + off) as *mut u32, value);
     }
+}
+
+fn arch_set_vbar_el1(addr: u64) {
+    unsafe {
+        asm!("msr vbar_el1, {addr}", addr = in(reg) addr, options(nostack, preserves_flags));
+        asm!("isb", options(nostack, preserves_flags));
+    }
+}
+
+fn arch_enable_irq() {
+    unsafe {
+        asm!("msr daifclr, #2", options(nostack, preserves_flags));
+    }
+}
+
+fn arch_disable_irq() {
+    unsafe {
+        asm!("msr daifset, #2", options(nostack, preserves_flags));
+    }
+}
+
+fn arch_read_cntfrq_el0() -> u64 {
+    let mut value: u64 = 0;
+    unsafe {
+        asm!("mrs {out}, cntfrq_el0", out = out(reg) value, options(nostack, preserves_flags));
+    }
+    value
+}
+
+fn arch_write_cntp_tval_el0(value: u32) {
+    unsafe {
+        asm!("msr cntp_tval_el0, {value}", value = in(reg) value as u64, options(nostack, preserves_flags));
+    }
+}
+
+fn arch_write_cntp_ctl_el0(value: u32) {
+    unsafe {
+        asm!("msr cntp_ctl_el0, {value}", value = in(reg) value as u64, options(nostack, preserves_flags));
+    }
+}
+
+fn arch_read_cntp_ctl_el0() -> u32 {
+    let mut value: u64 = 0;
+    unsafe {
+        asm!("mrs {out}, cntp_ctl_el0", out = out(reg) value, options(nostack, preserves_flags));
+    }
+    value as u32
+}
+
+fn gic_set_irq_priority(irq: u32, prio: u8) {
+    let reg = GICD_IPRIORITYR + ((irq & !3) as usize);
+    let shift = (irq & 3) * 8;
+    let mut value = mmio_read32(GICD_BASE, reg);
+    value &= !(0xFF << shift);
+    value |= (prio as u32) << shift;
+    mmio_write32(GICD_BASE, reg, value);
+}
+
+#[no_mangle]
+pub extern "C" fn qos_irq_dispatch() {
+    let iar = mmio_read32(GICC_BASE, GICC_IAR);
+    let irq = iar & 0x3FF;
+    unsafe {
+        IRQ_LAST = irq;
+        if irq == GIC_IRQ_TIMER_PPI {
+            IRQ_TIMER_HITS = IRQ_TIMER_HITS.saturating_add(1);
+            arch_write_cntp_tval_el0(IRQ_TIMER_RELOAD_TICKS);
+        }
+    }
+    if irq < 1020 {
+        mmio_write32(GICC_BASE, GICC_EOIR, iar);
+    }
+}
+
+fn gic_timer_irq_probe() -> bool {
+    let freq = arch_read_cntfrq_el0();
+    if freq != 0 {
+        let ticks = freq / 100;
+        if ticks > 0 && ticks <= u32::MAX as u64 {
+            unsafe {
+                IRQ_TIMER_RELOAD_TICKS = ticks as u32;
+            }
+        }
+    }
+
+    unsafe {
+        IRQ_LAST = GIC_IRQ_SPURIOUS;
+        IRQ_TIMER_HITS = 0;
+    }
+
+    arch_write_cntp_ctl_el0(0);
+
+    mmio_write32(GICC_BASE, GICC_CTLR, 0);
+    mmio_write32(GICD_BASE, GICD_CTLR, 0);
+    mmio_write32(GICD_BASE, GICD_ICENABLER0, 1 << GIC_IRQ_TIMER_PPI);
+    mmio_write32(GICD_BASE, GICD_ICPENDR0, 1 << GIC_IRQ_TIMER_PPI);
+    let mut group = mmio_read32(GICD_BASE, GICD_IGROUPR0);
+    group |= 1 << GIC_IRQ_TIMER_PPI;
+    mmio_write32(GICD_BASE, GICD_IGROUPR0, group);
+    gic_set_irq_priority(GIC_IRQ_TIMER_PPI, 0x80);
+    mmio_write32(GICC_BASE, GICC_PMR, 0xFF);
+    mmio_write32(GICC_BASE, GICC_CTLR, 0x3);
+    mmio_write32(GICD_BASE, GICD_ISENABLER0, 1 << GIC_IRQ_TIMER_PPI);
+    mmio_write32(GICD_BASE, GICD_CTLR, 0x3);
+    fence(Ordering::SeqCst);
+
+    let reload = unsafe { IRQ_TIMER_RELOAD_TICKS };
+    arch_write_cntp_tval_el0(reload);
+    arch_write_cntp_ctl_el0(1);
+
+    for _ in 0..IRQ_TIMER_PROBE_SPINS {
+        if (arch_read_cntp_ctl_el0() & (1 << 2)) != 0 {
+            unsafe {
+                IRQ_TIMER_HITS = 1;
+            }
+            break;
+        }
+        let iar = mmio_read32(GICC_BASE, GICC_IAR);
+        let irq = iar & 0x3FF;
+        if irq == GIC_IRQ_TIMER_PPI {
+            unsafe {
+                IRQ_LAST = irq;
+                IRQ_TIMER_HITS = 1;
+            }
+            mmio_write32(GICC_BASE, GICC_EOIR, iar);
+            break;
+        }
+        if irq < 1020 {
+            mmio_write32(GICC_BASE, GICC_EOIR, iar);
+        }
+        unsafe {
+            asm!("nop", options(nostack, preserves_flags));
+        }
+    }
+
+    arch_write_cntp_ctl_el0(0);
+    mmio_write32(GICD_BASE, GICD_ICENABLER0, 1 << GIC_IRQ_TIMER_PPI);
+    mmio_write32(GICC_BASE, GICC_CTLR, 0);
+    mmio_write32(GICD_BASE, GICD_CTLR, 0);
+    fence(Ordering::SeqCst);
+
+    unsafe { IRQ_TIMER_HITS != 0 }
 }
 
 fn align_up(value: usize, align: usize) -> usize {
@@ -2380,49 +2605,55 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
     uart_puts("probe=enter\n");
     fake_dtb_build();
     let fallback_dtb = unsafe { addr_of!(QOS_FAKE_DTB.blob) as u64 };
-    let (resolved_dtb, parsed_input_dtb) = locate_dtb_and_extract(dtb_addr);
-    let use_input_dtb = resolved_dtb != 0;
-    let effective_dtb = if use_input_dtb {
-        resolved_dtb
+    let (resolved_dtb, mut dtb_extract) = locate_dtb_and_extract(dtb_addr);
+    let mut effective_dtb = resolved_dtb;
+    let dtb_handoff = if resolved_dtb != 0
+        && dtb_extract.mmap_from_dtb
+        && dtb_extract.initramfs_from_dtb
+        && dtb_extract.mem_size != 0
+        && dtb_extract.initramfs_size != 0
+        && dtb_extract.dtb_size != 0
+    {
+        if resolved_dtb == dtb_addr {
+            "x0"
+        } else {
+            "scan"
+        }
     } else {
-        fallback_dtb
+        effective_dtb = fallback_dtb;
+        dtb_extract = dtb_extract_boot_info(effective_dtb);
+        "fallback"
     };
-    let dtb_nonzero = effective_dtb != 0;
-    let dtb_ok = dtb_magic_ok(effective_dtb);
+    let mut boot_valid = effective_dtb != 0
+        && dtb_extract.mmap_from_dtb
+        && dtb_extract.initramfs_from_dtb
+        && dtb_extract.mem_size != 0
+        && dtb_extract.initramfs_size != 0
+        && dtb_extract.dtb_size != 0;
 
     let mut info = BootInfo::default();
     info.magic = QOS_BOOT_MAGIC;
-    let dtb_extract = if use_input_dtb {
-        parsed_input_dtb
-    } else {
-        dtb_extract_boot_info(effective_dtb)
-    };
-    let (usable_base, usable_len) = if dtb_extract.mmap_from_dtb {
-        (dtb_extract.mem_base, dtb_extract.mem_size)
-    } else {
-        (0x4000_0000, 0x0400_0000)
-    };
-    info.mmap_entry_count = 0;
-    let _ = boot_info_push_mmap(&mut info, usable_base, usable_len, QOS_MMAP_TYPE_USABLE);
-    if dtb_extract.initramfs_from_dtb {
-        info.initramfs_addr = dtb_extract.initramfs_addr;
-        info.initramfs_size = dtb_extract.initramfs_size;
-    } else {
-        info.initramfs_addr = 0x4400_0000;
-        info.initramfs_size = 0x1000;
-    }
-    info.dtb_addr = effective_dtb;
-    let kernel_start = unsafe { &__kernel_phys_start as *const u8 as u64 };
-    let kernel_end = unsafe { &__kernel_phys_end as *const u8 as u64 };
-    if kernel_end > kernel_start {
+    if boot_valid {
+        info.mmap_entry_count = 0;
         let _ = boot_info_push_mmap(
             &mut info,
-            kernel_start,
-            kernel_end - kernel_start,
-            QOS_MMAP_TYPE_RESERVED,
+            dtb_extract.mem_base,
+            dtb_extract.mem_size,
+            QOS_MMAP_TYPE_USABLE,
         );
-    }
-    if info.initramfs_size != 0 {
+        info.initramfs_addr = dtb_extract.initramfs_addr;
+        info.initramfs_size = dtb_extract.initramfs_size;
+        info.dtb_addr = effective_dtb;
+        let kernel_start = unsafe { &__kernel_phys_start as *const u8 as u64 };
+        let kernel_end = unsafe { &__kernel_phys_end as *const u8 as u64 };
+        if kernel_end > kernel_start {
+            let _ = boot_info_push_mmap(
+                &mut info,
+                kernel_start,
+                kernel_end - kernel_start,
+                QOS_MMAP_TYPE_RESERVED,
+            );
+        }
         let initramfs_addr = info.initramfs_addr;
         let initramfs_size = info.initramfs_size;
         let _ = boot_info_push_mmap(
@@ -2431,39 +2662,35 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
             initramfs_size,
             QOS_MMAP_TYPE_RESERVED,
         );
-    }
-    let dtb_size = if dtb_extract.dtb_size != 0 {
-        dtb_extract.dtb_size
-    } else {
-        FAKE_DTB_TOTAL_SIZE as u64
-    };
-    if info.dtb_addr != 0 && dtb_size != 0 {
         let dtb_addr = info.dtb_addr;
+        let dtb_size = dtb_extract.dtb_size;
         let _ = boot_info_push_mmap(&mut info, dtb_addr, dtb_size, QOS_MMAP_TYPE_RESERVED);
+        if info.mmap_entry_count == 0 {
+            boot_valid = false;
+        }
     }
 
-    let mmap_source = if dtb_extract.mmap_from_dtb {
-        "dtb"
-    } else {
-        "dtb_stub"
-    };
-    let initramfs_source = if dtb_extract.initramfs_from_dtb {
-        "dtb"
-    } else {
-        "stub"
-    };
+    let mmap_source = "dtb";
+    let initramfs_source = "dtb";
     let mmap_len_nonzero = info.mmap_entries[0].length != 0;
     let initramfs_size_nonzero = info.initramfs_size != 0;
-    let kernel_ok = kernel_entry(&info).is_ok();
+    let kernel_ok = boot_valid && kernel_entry(&info).is_ok();
+    let irq_timer_ok = if kernel_ok { gic_timer_irq_probe() } else { false };
+    let irq_timer = if irq_timer_ok { "ok" } else { "fail" };
     let icmp_ok = if kernel_ok {
         let mut reply = [0u8; 8];
         net_icmp_echo(QOS_NET_IPV4_GATEWAY, 1, 1, b"qos", &mut reply).is_some()
     } else {
         false
     };
-    let (net_tx_ok, _net_rx_ok, _icmp_real_ok) = virtio_net_probe();
+    let (net_tx_ok, _net_rx_ok, _icmp_real_ok) = if kernel_ok {
+        virtio_net_probe()
+    } else {
+        (false, false, false)
+    };
+    let dtb_ok = dtb_magic_ok(effective_dtb);
 
-    if kernel_ok && dtb_nonzero && dtb_ok && icmp_ok {
+    if kernel_ok && dtb_ok && icmp_ok {
         if net_tx_ok {
             emit_boot_marker_prefix(
                 mmap_source,
@@ -2471,6 +2698,8 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
                 mmap_len_nonzero,
                 initramfs_source,
                 initramfs_size_nonzero,
+                dtb_handoff,
+                irq_timer,
             );
             uart_puts("icmp_echo=gateway_ok net_tx=real_ok net_tx_stage=ok net_rx=");
             uart_put_net_rx_result();
@@ -2488,6 +2717,8 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
                 mmap_len_nonzero,
                 initramfs_source,
                 initramfs_size_nonzero,
+                dtb_handoff,
+                irq_timer,
             );
             uart_puts("icmp_echo=gateway_ok net_tx=real_fail net_tx_stage=");
             uart_put_net_tx_stage();
@@ -2504,7 +2735,7 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
             uart_puts("\n");
         }
     } else {
-        uart_puts("QOS kernel started impl=rust arch=aarch64 handoff=invalid entry=kernel_main abi=x0 dtb_addr_nonzero=0 dtb_magic=bad mmap_source=dtb_stub mmap_count=0 mmap_len_nonzero=0 initramfs_source=stub initramfs_size_nonzero=0 el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb icmp_echo=gateway_fail net_tx=real_fail net_tx_stage=");
+        uart_puts("QOS kernel started impl=rust arch=aarch64 handoff=invalid entry=kernel_main abi=x0 dtb_addr_nonzero=0 dtb_magic=bad mmap_source=dtb mmap_count=0 mmap_len_nonzero=0 initramfs_source=dtb initramfs_size_nonzero=0 dtb_handoff=invalid el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb irq_timer=fail icmp_echo=gateway_fail net_tx=real_fail net_tx_stage=");
         uart_put_net_tx_stage();
         uart_puts(" net_tx_ver=");
         uart_put_net_tx_version();

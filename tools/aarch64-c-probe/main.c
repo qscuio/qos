@@ -52,6 +52,21 @@
 #define RAM_SCAN_BASE 0x40000000ULL
 #define RAM_SCAN_END 0x50000000ULL
 #define RAM_SCAN_STEP 0x1000ULL
+#define GICD_BASE 0x08000000u
+#define GICC_BASE 0x08010000u
+#define GICD_CTLR 0x000u
+#define GICD_IGROUPR0 0x080u
+#define GICD_ISENABLER0 0x100u
+#define GICD_ICENABLER0 0x180u
+#define GICD_ICPENDR0 0x280u
+#define GICD_IPRIORITYR 0x400u
+#define GICC_CTLR 0x000u
+#define GICC_PMR 0x004u
+#define GICC_IAR 0x00Cu
+#define GICC_EOIR 0x010u
+#define GIC_IRQ_TIMER_PPI 30u
+#define GIC_IRQ_SPURIOUS 1023u
+#define IRQ_TIMER_PROBE_SPINS 5000000u
 #define VIRTIO_MMIO_BASE_START 0x0A000000u
 #define VIRTIO_MMIO_STRIDE 0x200u
 #define VIRTIO_MMIO_SCAN_SLOTS 32u
@@ -158,6 +173,10 @@ static uint32_t g_net_tx_stage = NET_TX_STAGE_QUEUE;
 static uint32_t g_net_rx_stage = NET_RX_STAGE_QUEUE;
 static uint32_t g_net_tx_virtio_version = 0;
 static uint32_t g_icmp_real_stage = ICMP_REAL_STAGE_QUEUE;
+extern uint8_t qos_vector_table[];
+static volatile uint32_t g_irq_last = GIC_IRQ_SPURIOUS;
+static volatile uint32_t g_irq_timer_hits = 0;
+static uint32_t g_irq_timer_reload_ticks = 1000000u;
 
 void *memset(void *dst, int value, size_t n) {
     unsigned char *p = (unsigned char *)dst;
@@ -1834,14 +1853,12 @@ static uint64_t locate_dtb_and_extract(uint64_t initial_dtb, dtb_boot_extract_t 
         return 0;
     }
     *out = (dtb_boot_extract_t){0};
-
     if (initial_dtb != 0 && dtb_magic_ok(initial_dtb)) {
         dtb_extract_boot_info(initial_dtb, out);
         if (out->mmap_from_dtb || out->initramfs_from_dtb) {
             return initial_dtb;
         }
     }
-
     addr = RAM_SCAN_BASE;
     while (addr < RAM_SCAN_END) {
         if (addr != initial_dtb && dtb_magic_ok(addr)) {
@@ -1854,7 +1871,6 @@ static uint64_t locate_dtb_and_extract(uint64_t initial_dtb, dtb_boot_extract_t 
         }
         addr += RAM_SCAN_STEP;
     }
-
     if (initial_dtb != 0 && dtb_magic_ok(initial_dtb)) {
         dtb_extract_boot_info(initial_dtb, out);
         return initial_dtb;
@@ -1863,7 +1879,8 @@ static uint64_t locate_dtb_and_extract(uint64_t initial_dtb, dtb_boot_extract_t 
 }
 
 static void emit_boot_marker_prefix(const char *mmap_source, uint32_t mmap_count, int mmap_len_nonzero,
-                                    const char *initramfs_source, int initramfs_size_nonzero) {
+                                    const char *initramfs_source, int initramfs_size_nonzero,
+                                    const char *dtb_handoff, const char *irq_timer) {
     uart_puts("QOS kernel started impl=c arch=aarch64 handoff=boot_info entry=kernel_main abi=x0 dtb_addr_nonzero=1 dtb_magic=ok mmap_source=");
     uart_puts(mmap_source);
     uart_puts(" mmap_count=");
@@ -1874,7 +1891,11 @@ static void emit_boot_marker_prefix(const char *mmap_source, uint32_t mmap_count
     uart_puts(initramfs_source);
     uart_puts(" initramfs_size_nonzero=");
     uart_put_u32((uint32_t)(initramfs_size_nonzero != 0 ? 1u : 0u));
-    uart_puts(" el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb ");
+    uart_puts(" dtb_handoff=");
+    uart_puts(dtb_handoff);
+    uart_puts(" el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb irq_timer=");
+    uart_puts(irq_timer);
+    uart_puts(" ");
 }
 
 static int boot_info_push_mmap(boot_info_t *info, uint64_t base, uint64_t length, uint32_t type) {
@@ -1902,6 +1923,135 @@ static uint32_t mmio_read32(uintptr_t base, uintptr_t off) {
 static void mmio_write32(uintptr_t base, uintptr_t off, uint32_t value) {
     volatile uint32_t *addr = (volatile uint32_t *)(base + off);
     *addr = value;
+}
+
+static void arch_isb(void) {
+    __asm__ volatile("isb" ::: "memory");
+}
+
+static void arch_dsb_sy(void) {
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+
+static void arch_relax(void) {
+    __asm__ volatile("nop" ::: "memory");
+}
+
+static void arch_set_vbar_el1(uint64_t addr) {
+    __asm__ volatile("msr vbar_el1, %0" ::"r"(addr) : "memory");
+    arch_isb();
+}
+
+static void arch_enable_irq(void) {
+    __asm__ volatile("msr daifclr, #2" ::: "memory");
+}
+
+static void arch_disable_irq(void) {
+    __asm__ volatile("msr daifset, #2" ::: "memory");
+}
+
+static uint64_t arch_read_cntfrq_el0(void) {
+    uint64_t value = 0;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(value));
+    return value;
+}
+
+static void arch_write_cntp_tval_el0(uint32_t value) {
+    __asm__ volatile("msr cntp_tval_el0, %0" ::"r"((uint64_t)value) : "memory");
+}
+
+static void arch_write_cntp_ctl_el0(uint32_t value) {
+    __asm__ volatile("msr cntp_ctl_el0, %0" ::"r"((uint64_t)value) : "memory");
+}
+
+static uint32_t arch_read_cntp_ctl_el0(void) {
+    uint64_t value = 0;
+    __asm__ volatile("mrs %0, cntp_ctl_el0" : "=r"(value));
+    return (uint32_t)value;
+}
+
+static void gic_set_irq_priority(uint32_t irq, uint8_t prio) {
+    uintptr_t reg = GICD_IPRIORITYR + (uintptr_t)(irq & ~3u);
+    uint32_t shift = (irq & 3u) * 8u;
+    uint32_t v = mmio_read32(GICD_BASE, reg);
+    v &= ~(0xFFu << shift);
+    v |= (uint32_t)prio << shift;
+    mmio_write32(GICD_BASE, reg, v);
+}
+
+void qos_irq_dispatch(void) {
+    uint32_t iar = mmio_read32(GICC_BASE, GICC_IAR);
+    uint32_t irq = iar & 0x3FFu;
+    g_irq_last = irq;
+    if (irq == GIC_IRQ_TIMER_PPI) {
+        g_irq_timer_hits++;
+        arch_write_cntp_tval_el0(g_irq_timer_reload_ticks);
+    }
+    if (irq < 1020u) {
+        mmio_write32(GICC_BASE, GICC_EOIR, iar);
+    }
+}
+
+static int gic_timer_irq_probe(void) {
+    uint64_t freq = arch_read_cntfrq_el0();
+    uint32_t spins = 0;
+    uint32_t group = 0;
+    uint32_t reload = g_irq_timer_reload_ticks;
+    if (freq != 0u) {
+        uint64_t ticks = freq / 100u;
+        if (ticks != 0u && ticks <= 0xFFFFFFFFu) {
+            g_irq_timer_reload_ticks = (uint32_t)ticks;
+        }
+    }
+    reload = g_irq_timer_reload_ticks;
+
+    g_irq_last = GIC_IRQ_SPURIOUS;
+    g_irq_timer_hits = 0;
+    arch_write_cntp_ctl_el0(0u);
+
+    mmio_write32(GICC_BASE, GICC_CTLR, 0u);
+    mmio_write32(GICD_BASE, GICD_CTLR, 0u);
+    mmio_write32(GICD_BASE, GICD_ICENABLER0, 1u << GIC_IRQ_TIMER_PPI);
+    mmio_write32(GICD_BASE, GICD_ICPENDR0, 1u << GIC_IRQ_TIMER_PPI);
+    group = mmio_read32(GICD_BASE, GICD_IGROUPR0);
+    group |= 1u << GIC_IRQ_TIMER_PPI;
+    mmio_write32(GICD_BASE, GICD_IGROUPR0, group);
+    gic_set_irq_priority(GIC_IRQ_TIMER_PPI, 0x80u);
+    mmio_write32(GICC_BASE, GICC_PMR, 0xFFu);
+    mmio_write32(GICC_BASE, GICC_CTLR, 0x3u);
+    mmio_write32(GICD_BASE, GICD_ISENABLER0, 1u << GIC_IRQ_TIMER_PPI);
+    mmio_write32(GICD_BASE, GICD_CTLR, 0x3u);
+    arch_dsb_sy();
+    arch_isb();
+
+    arch_write_cntp_tval_el0(reload);
+    arch_write_cntp_ctl_el0(1u);
+    for (spins = 0u; spins < IRQ_TIMER_PROBE_SPINS; spins++) {
+        if ((arch_read_cntp_ctl_el0() & (1u << 2)) != 0u) {
+            g_irq_timer_hits = 1u;
+            break;
+        }
+        uint32_t iar = mmio_read32(GICC_BASE, GICC_IAR);
+        uint32_t irq = iar & 0x3FFu;
+        if (irq == GIC_IRQ_TIMER_PPI) {
+            g_irq_last = irq;
+            g_irq_timer_hits = 1u;
+            mmio_write32(GICC_BASE, GICC_EOIR, iar);
+            break;
+        }
+        if (irq < 1020u) {
+            mmio_write32(GICC_BASE, GICC_EOIR, iar);
+        }
+        arch_relax();
+    }
+
+    arch_write_cntp_ctl_el0(0u);
+    mmio_write32(GICD_BASE, GICD_ICENABLER0, 1u << GIC_IRQ_TIMER_PPI);
+    mmio_write32(GICC_BASE, GICC_CTLR, 0u);
+    mmio_write32(GICD_BASE, GICD_CTLR, 0u);
+    arch_dsb_sy();
+    arch_isb();
+    return g_irq_timer_hits != 0u;
 }
 
 static uintptr_t align_up(uintptr_t value, uintptr_t align) {
@@ -2541,84 +2691,68 @@ static const char *icmp_real_result_text(void) {
 }
 
 void c_main(uint64_t dtb_addr) {
-    uint64_t fallback_dtb;
+    uint64_t fallback_dtb = 0;
     uint64_t resolved_dtb;
-    uint64_t effective_dtb;
+    uint64_t effective_dtb = 0;
     boot_info_t info;
-    int kernel_ok;
+    int kernel_ok = 0;
     int icmp_ok = 0;
     int net_tx_ok = 0;
     int net_rx_ok = 0;
+    int irq_timer_ok = 0;
     uint64_t usable_base = 0;
     uint64_t usable_len = 0;
     uint64_t kernel_start = 0;
     uint64_t kernel_end = 0;
     uint64_t dtb_size = 0;
-    dtb_boot_extract_t input_extract = {0};
     dtb_boot_extract_t dtb_extract = {0};
-    const char *mmap_source = "dtb_stub";
-    const char *initramfs_source = "stub";
-    int use_input_dtb = 0;
+    const char *mmap_source = "dtb";
+    const char *initramfs_source = "dtb";
+    const char *dtb_handoff = "x0";
+    const char *irq_timer = "fail";
 
     uart_puts("probe=enter\n");
 
     fake_dtb_build();
     fallback_dtb = (uint64_t)(uintptr_t)&QOS_FAKE_DTB.blob[0];
-    resolved_dtb = locate_dtb_and_extract(dtb_addr, &input_extract);
-    use_input_dtb = resolved_dtb != 0;
-    if (use_input_dtb) {
+    resolved_dtb = locate_dtb_and_extract(dtb_addr, &dtb_extract);
+    if (resolved_dtb != 0u && dtb_extract.mmap_from_dtb != 0 && dtb_extract.initramfs_from_dtb != 0 &&
+        dtb_extract.mem_size != 0u && dtb_extract.initramfs_size != 0u && dtb_extract.dtb_size != 0u) {
+        dtb_handoff = resolved_dtb == dtb_addr ? "x0" : "scan";
         effective_dtb = resolved_dtb;
     } else {
+        dtb_handoff = "fallback";
         effective_dtb = fallback_dtb;
+        dtb_extract_boot_info(effective_dtb, &dtb_extract);
+    }
+
+    usable_base = dtb_extract.mem_base;
+    usable_len = dtb_extract.mem_size;
+    dtb_size = dtb_extract.dtb_size;
+    if (effective_dtb == 0u || dtb_extract.mmap_from_dtb == 0 || dtb_extract.initramfs_from_dtb == 0 ||
+        usable_len == 0u || dtb_extract.initramfs_size == 0u || dtb_size == 0u) {
+        goto invalid_boot;
     }
 
     info = (boot_info_t){0};
     info.magic = QOS_BOOT_MAGIC;
-    if (use_input_dtb) {
-        dtb_extract = input_extract;
-    } else {
-        dtb_extract_boot_info(effective_dtb, &dtb_extract);
-    }
-    if (dtb_extract.mmap_from_dtb) {
-        usable_base = dtb_extract.mem_base;
-        usable_len = dtb_extract.mem_size;
-        mmap_source = "dtb";
-    } else {
-        usable_base = 0x40000000ULL;
-        usable_len = 0x04000000ULL;
-        mmap_source = "dtb_stub";
-    }
     info.mmap_entry_count = 0u;
     (void)boot_info_push_mmap(&info, usable_base, usable_len, QOS_MMAP_TYPE_USABLE);
-    if (dtb_extract.initramfs_from_dtb) {
-        info.initramfs_addr = dtb_extract.initramfs_addr;
-        info.initramfs_size = dtb_extract.initramfs_size;
-        initramfs_source = "dtb";
-    } else {
-        info.initramfs_addr = 0x44000000ULL;
-        info.initramfs_size = 0x1000ULL;
-        initramfs_source = "stub";
-    }
+    info.initramfs_addr = dtb_extract.initramfs_addr;
+    info.initramfs_size = dtb_extract.initramfs_size;
     info.dtb_addr = effective_dtb;
     kernel_start = (uint64_t)(uintptr_t)&__kernel_phys_start;
     kernel_end = (uint64_t)(uintptr_t)&__kernel_phys_end;
     if (kernel_start != 0u && kernel_end > kernel_start) {
         (void)boot_info_push_mmap(&info, kernel_start, kernel_end - kernel_start, QOS_MMAP_TYPE_RESERVED);
     }
-    if (info.initramfs_size != 0u) {
-        (void)boot_info_push_mmap(&info, info.initramfs_addr, info.initramfs_size, QOS_MMAP_TYPE_RESERVED);
-    }
-    if (dtb_extract.dtb_size != 0u) {
-        dtb_size = dtb_extract.dtb_size;
-    } else {
-        dtb_size = (uint64_t)FAKE_DTB_TOTAL_SIZE;
-    }
-    if (info.dtb_addr != 0u && dtb_size != 0u) {
-        (void)boot_info_push_mmap(&info, info.dtb_addr, dtb_size, QOS_MMAP_TYPE_RESERVED);
-    }
+    (void)boot_info_push_mmap(&info, info.initramfs_addr, info.initramfs_size, QOS_MMAP_TYPE_RESERVED);
+    (void)boot_info_push_mmap(&info, info.dtb_addr, dtb_size, QOS_MMAP_TYPE_RESERVED);
 
     kernel_ok = qos_kernel_entry(&info) == 0;
     if (kernel_ok) {
+        irq_timer_ok = gic_timer_irq_probe();
+        irq_timer = irq_timer_ok != 0 ? "ok" : "fail";
         uint8_t payload[3] = {'q', 'o', 's'};
         uint8_t reply[8] = {0};
         uint32_t src_ip = 0;
@@ -2629,7 +2763,7 @@ void c_main(uint64_t dtb_addr) {
     if (kernel_ok && dtb_magic_ok(effective_dtb) && icmp_ok) {
         if (net_tx_ok) {
             emit_boot_marker_prefix(mmap_source, info.mmap_entry_count, info.mmap_entries[0].length != 0u,
-                                    initramfs_source, info.initramfs_size != 0u);
+                                    initramfs_source, info.initramfs_size != 0u, dtb_handoff, irq_timer);
             uart_puts("icmp_echo=gateway_ok net_tx=real_ok net_tx_stage=ok net_rx=");
             uart_puts(net_rx_result_text());
             uart_puts(" net_rx_stage=");
@@ -2641,7 +2775,7 @@ void c_main(uint64_t dtb_addr) {
             uart_puts("\n");
         } else {
             emit_boot_marker_prefix(mmap_source, info.mmap_entry_count, info.mmap_entries[0].length != 0u,
-                                    initramfs_source, info.initramfs_size != 0u);
+                                    initramfs_source, info.initramfs_size != 0u, dtb_handoff, irq_timer);
             uart_puts("icmp_echo=gateway_ok net_tx=real_fail net_tx_stage=");
             uart_puts(net_tx_stage_text());
             uart_puts(" net_tx_ver=");
@@ -2657,7 +2791,8 @@ void c_main(uint64_t dtb_addr) {
             uart_puts("\n");
         }
     } else {
-        uart_puts("QOS kernel started impl=c arch=aarch64 handoff=invalid entry=kernel_main abi=x0 dtb_addr_nonzero=0 dtb_magic=bad mmap_source=dtb_stub mmap_count=0 mmap_len_nonzero=0 initramfs_source=stub initramfs_size_nonzero=0 el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb icmp_echo=gateway_fail net_tx=real_fail net_tx_stage=");
+invalid_boot:
+        uart_puts("QOS kernel started impl=c arch=aarch64 handoff=invalid entry=kernel_main abi=x0 dtb_addr_nonzero=0 dtb_magic=bad mmap_source=dtb mmap_count=0 mmap_len_nonzero=0 initramfs_source=dtb initramfs_size_nonzero=0 dtb_handoff=invalid el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb irq_timer=fail icmp_echo=gateway_fail net_tx=real_fail net_tx_stage=");
         uart_puts(net_tx_stage_text());
         uart_puts(" net_tx_ver=");
         uart_puts(net_tx_version_text());

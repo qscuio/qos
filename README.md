@@ -170,7 +170,7 @@ and `tools/aarch64-probe/src/main.rs`):
 - Export `__kernel_phys_start` / `__kernel_phys_end` from AArch64 linkers, and
   reserve this physical range in Rust PMM initialization.
 - AArch64 probe boot-info now publishes multiple mmap entries:
-  - entry 0: usable RAM region (from DTB `/memory` or deterministic stub)
+  - entry 0: usable RAM region (from parsed DTB `/memory`)
   - additional reserved entries: kernel image, initramfs, DTB blob
 - AArch64 probe images are now linked at high VA (`0xFFFF_FFFF_8000_0000`)
   with low physical load addresses (`0x4008_0000`), and startup jumps to the
@@ -309,7 +309,10 @@ Preview generated command without launching:
 
 - Current smoke checks are marker-based boot/runtime probes over serial.
 - aarch64 startup stubs now perform an explicit EL2→EL1 transition path (when entered at EL2) and preserve DTB handoff register state into kernel entry.
-- aarch64 probe boot currently enters with `qemu -kernel` and may not receive a nonzero DTB pointer in `x0` on this ELF entry path.
-- To keep handoff markers DTB-derived in this mode, both C and Rust aarch64 probes build a valid embedded fallback FDT (`/memory` + `/chosen` initrd fields) and parse it through the same DTB parser path.
-- This improves boot-info fidelity (`mmap_source=dtb`, `initramfs_source=dtb`) but is still not a full implementation of the design-doc bootloader sequence.
+- aarch64 DTB handoff markers now report `dtb_handoff=x0|scan|fallback`:
+  - `x0`: direct handoff pointer from the entry ABI
+  - `scan`: DTB located via RAM scan when direct handoff is absent/invalid
+  - `fallback`: embedded minimal FDT used as last-resort compatibility path
+- Boot markers now include `irq_timer=ok|fail` from the GICv2 + EL1 physical timer probe path.
+- The probe programs GIC distributor/CPU interface for timer PPI 30 and validates timer interrupt readiness during boot.
 - If QEMU seems stuck, stop with `Ctrl+C`.

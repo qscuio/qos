@@ -77,6 +77,63 @@ _start:
     wfe
     b    3b
 
+.section .text.vectors, "ax"
+.balign 2048
+.global qos_vector_table
+qos_vector_table:
+.macro VECTOR_BRANCH target
+    b   \target
+    .space 124
+.endm
+    VECTOR_BRANCH qos_vector_default    // EL1t sync
+    VECTOR_BRANCH qos_vector_default    // EL1t irq
+    VECTOR_BRANCH qos_vector_default    // EL1t fiq
+    VECTOR_BRANCH qos_vector_default    // EL1t serr
+    VECTOR_BRANCH qos_vector_default    // EL1h sync
+    VECTOR_BRANCH qos_vector_irq_el1h   // EL1h irq
+    VECTOR_BRANCH qos_vector_default    // EL1h fiq
+    VECTOR_BRANCH qos_vector_default    // EL1h serr
+    VECTOR_BRANCH qos_vector_default    // EL0 64 sync
+    VECTOR_BRANCH qos_vector_default    // EL0 64 irq
+    VECTOR_BRANCH qos_vector_default    // EL0 64 fiq
+    VECTOR_BRANCH qos_vector_default    // EL0 64 serr
+    VECTOR_BRANCH qos_vector_default    // EL0 32 sync
+    VECTOR_BRANCH qos_vector_default    // EL0 32 irq
+    VECTOR_BRANCH qos_vector_default    // EL0 32 fiq
+    VECTOR_BRANCH qos_vector_default    // EL0 32 serr
+
+qos_vector_irq_el1h:
+    sub  sp, sp, #160
+    stp  x0, x1, [sp, #0]
+    stp  x2, x3, [sp, #16]
+    stp  x4, x5, [sp, #32]
+    stp  x6, x7, [sp, #48]
+    stp  x8, x9, [sp, #64]
+    stp  x10, x11, [sp, #80]
+    stp  x12, x13, [sp, #96]
+    stp  x14, x15, [sp, #112]
+    stp  x16, x17, [sp, #128]
+    str  x18, [sp, #144]
+    str  x30, [sp, #152]
+    bl   qos_irq_dispatch
+    ldr  x30, [sp, #152]
+    ldr  x18, [sp, #144]
+    ldp  x16, x17, [sp, #128]
+    ldp  x14, x15, [sp, #112]
+    ldp  x12, x13, [sp, #96]
+    ldp  x10, x11, [sp, #80]
+    ldp  x8, x9, [sp, #64]
+    ldp  x6, x7, [sp, #48]
+    ldp  x4, x5, [sp, #32]
+    ldp  x2, x3, [sp, #16]
+    ldp  x0, x1, [sp, #0]
+    add  sp, sp, #160
+    eret
+
+qos_vector_default:
+    wfe
+    b    qos_vector_default
+
 .section .bss, "aw", %nobits
 .balign 4096
 qos_ttbr0_l0_table:
