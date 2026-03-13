@@ -93,6 +93,29 @@ const SHELL_IO_MAX: usize = 2048;
 const MAPWATCH_POLL_SPINS: u32 = 200_000;
 const MAPWATCH_SIDE_POLL_SPINS: u32 = 400_000;
 const SEMIHOSTING_SYS_WRITE0: usize = 0x04;
+const FDT_MAGIC_BE: u32 = 0xD00D_FEED;
+const FDT_BEGIN_NODE: u32 = 1;
+const FDT_END_NODE: u32 = 2;
+const FDT_PROP: u32 = 3;
+const FDT_NOP: u32 = 4;
+const FDT_END: u32 = 9;
+const DTB_MAX_TOTAL_SIZE: usize = 2 * 1024 * 1024;
+const DTB_MAX_DEPTH: usize = 16;
+const FAKE_DTB_TOTAL_SIZE: usize = 0x138;
+const FAKE_DTB_OFF_STRUCT: usize = 0x38;
+const FAKE_DTB_OFF_STRINGS: usize = 0xE8;
+const FAKE_DTB_OFF_MEMRSV: usize = 0x28;
+const FAKE_DTB_SIZE_STRUCT: usize = 0xB0;
+const FAKE_DTB_SIZE_STRINGS: usize = 0x50;
+const FAKE_DTB_STR_OFF_ADDR_CELLS: u32 = 0;
+const FAKE_DTB_STR_OFF_SIZE_CELLS: u32 = 15;
+const FAKE_DTB_STR_OFF_DEVICE_TYPE: u32 = 27;
+const FAKE_DTB_STR_OFF_REG: u32 = 39;
+const FAKE_DTB_STR_OFF_INITRD_START: u32 = 43;
+const FAKE_DTB_STR_OFF_INITRD_END: u32 = 62;
+const RAM_SCAN_BASE: u64 = 0x4000_0000;
+const RAM_SCAN_END: u64 = 0x5000_0000;
+const RAM_SCAN_STEP: u64 = 0x1000;
 
 #[no_mangle]
 static mut SHELL_FILE_PATHS: [[u8; SHELL_PATH_MAX]; SHELL_FILE_MAX] = [[0; SHELL_PATH_MAX]; SHELL_FILE_MAX];
@@ -164,17 +187,16 @@ static mut QOS_STACK: [u8; 65536] = [0; 65536];
 
 #[repr(C, align(8))]
 struct FakeDtb {
-    magic: u32,
-    totalsize: u32,
-    blob: [u8; 32],
+    blob: [u8; FAKE_DTB_TOTAL_SIZE],
 }
 
 #[no_mangle]
-static QOS_FAKE_DTB: FakeDtb = FakeDtb {
-    magic: QOS_DTB_MAGIC,
-    totalsize: 0x28,
-    blob: [0; 32],
+static mut QOS_FAKE_DTB: FakeDtb = FakeDtb {
+    blob: [0; FAKE_DTB_TOTAL_SIZE],
 };
+
+#[no_mangle]
+static mut QOS_FAKE_DTB_READY: bool = false;
 
 global_asm!(
     r#"
@@ -1274,6 +1296,353 @@ fn dtb_magic_ok(dtb_addr: u64) -> bool {
     unsafe { read_volatile(dtb_addr as *const u32) == QOS_DTB_MAGIC }
 }
 
+#[derive(Clone, Copy)]
+struct DtbBootExtract {
+    mmap_from_dtb: bool,
+    mem_base: u64,
+    mem_size: u64,
+    initramfs_from_dtb: bool,
+    initramfs_addr: u64,
+    initramfs_size: u64,
+}
+
+impl DtbBootExtract {
+    const fn empty() -> Self {
+        Self {
+            mmap_from_dtb: false,
+            mem_base: 0,
+            mem_size: 0,
+            initramfs_from_dtb: false,
+            initramfs_addr: 0,
+            initramfs_size: 0,
+        }
+    }
+}
+
+fn dtb_be32_at(blob: &[u8], off: usize) -> Option<u32> {
+    if off + 4 > blob.len() {
+        return None;
+    }
+    Some(read_be32(blob, off))
+}
+
+fn dtb_cstr_end(blob: &[u8], start: usize, limit: usize) -> Option<usize> {
+    if start >= limit || limit > blob.len() {
+        return None;
+    }
+    let mut i = start;
+    while i < limit {
+        if blob[i] == 0 {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn dtb_node_name_eq(blob: &[u8], start: usize, end: usize, needle: &[u8]) -> bool {
+    if end < start || end - start != needle.len() {
+        return false;
+    }
+    &blob[start..end] == needle
+}
+
+fn dtb_node_name_starts_with(blob: &[u8], start: usize, end: usize, needle: &[u8]) -> bool {
+    if end < start || end - start < needle.len() {
+        return false;
+    }
+    &blob[start..start + needle.len()] == needle
+}
+
+fn dtb_prop_name_eq(
+    blob: &[u8],
+    strings_off: usize,
+    strings_end: usize,
+    name_off: usize,
+    target: &[u8],
+) -> bool {
+    let start = match strings_off.checked_add(name_off) {
+        Some(v) => v,
+        None => return false,
+    };
+    if start >= strings_end || strings_end > blob.len() {
+        return false;
+    }
+    let mut i = 0usize;
+    loop {
+        let p = start + i;
+        if p >= strings_end {
+            return false;
+        }
+        let b = blob[p];
+        if i == target.len() {
+            return b == 0;
+        }
+        if b != target[i] {
+            return false;
+        }
+        i += 1;
+    }
+}
+
+fn dtb_parse_cells_be(value: &[u8], cells: usize) -> Option<u64> {
+    if cells == 0 || cells > 2 || value.len() < cells * 4 {
+        return None;
+    }
+    let mut out = 0u64;
+    let mut i = 0usize;
+    while i < cells {
+        out = (out << 32) | read_be32(value, i * 4) as u64;
+        i += 1;
+    }
+    Some(out)
+}
+
+fn dtb_parse_scalar_be(value: &[u8]) -> Option<u64> {
+    let cells = core::cmp::min(value.len() / 4, 2);
+    if cells == 0 {
+        return None;
+    }
+    dtb_parse_cells_be(value, cells)
+}
+
+fn dtb_extract_boot_info(dtb_addr: u64) -> DtbBootExtract {
+    if dtb_addr == 0 {
+        return DtbBootExtract::empty();
+    }
+    let base = dtb_addr as *const u8;
+    let magic = unsafe {
+        ((read_volatile(base) as u32) << 24)
+            | ((read_volatile(base.add(1)) as u32) << 16)
+            | ((read_volatile(base.add(2)) as u32) << 8)
+            | (read_volatile(base.add(3)) as u32)
+    };
+    if magic != FDT_MAGIC_BE {
+        return DtbBootExtract::empty();
+    }
+
+    let total_size = unsafe {
+        ((read_volatile(base.add(4)) as u32) << 24)
+            | ((read_volatile(base.add(5)) as u32) << 16)
+            | ((read_volatile(base.add(6)) as u32) << 8)
+            | (read_volatile(base.add(7)) as u32)
+    } as usize;
+    if !(40..=DTB_MAX_TOTAL_SIZE).contains(&total_size) {
+        return DtbBootExtract::empty();
+    }
+
+    let blob = unsafe { core::slice::from_raw_parts(base, total_size) };
+    let off_struct = match dtb_be32_at(blob, 8) {
+        Some(v) => v as usize,
+        None => return DtbBootExtract::empty(),
+    };
+    let off_strings = match dtb_be32_at(blob, 12) {
+        Some(v) => v as usize,
+        None => return DtbBootExtract::empty(),
+    };
+    let size_strings = match dtb_be32_at(blob, 32) {
+        Some(v) => v as usize,
+        None => return DtbBootExtract::empty(),
+    };
+    let size_struct = match dtb_be32_at(blob, 36) {
+        Some(v) => v as usize,
+        None => return DtbBootExtract::empty(),
+    };
+    let struct_end = match off_struct.checked_add(size_struct) {
+        Some(v) if v <= blob.len() => v,
+        _ => return DtbBootExtract::empty(),
+    };
+    let strings_end = match off_strings.checked_add(size_strings) {
+        Some(v) if v <= blob.len() => v,
+        _ => return DtbBootExtract::empty(),
+    };
+
+    let mut depth = 0usize;
+    let mut in_memory = [false; DTB_MAX_DEPTH];
+    let mut in_chosen = [false; DTB_MAX_DEPTH];
+    let mut addr_cells = 2usize;
+    let mut size_cells = 2usize;
+    let mut out = DtbBootExtract::empty();
+    let mut initrd_start = 0u64;
+    let mut initrd_end = 0u64;
+    let mut have_initrd_start = false;
+    let mut have_initrd_end = false;
+
+    let mut pos = off_struct;
+    while pos + 4 <= struct_end {
+        let token = match dtb_be32_at(blob, pos) {
+            Some(v) => v,
+            None => return DtbBootExtract::empty(),
+        };
+        pos += 4;
+        match token {
+            FDT_BEGIN_NODE => {
+                let name_start = pos;
+                let name_end = match dtb_cstr_end(blob, name_start, struct_end) {
+                    Some(v) => v,
+                    None => return DtbBootExtract::empty(),
+                };
+                let parent_depth = depth;
+                if depth >= DTB_MAX_DEPTH {
+                    return DtbBootExtract::empty();
+                }
+                let parent_mem = if parent_depth == 0 {
+                    false
+                } else {
+                    in_memory[parent_depth - 1]
+                };
+                let parent_chosen = if parent_depth == 0 {
+                    false
+                } else {
+                    in_chosen[parent_depth - 1]
+                };
+                let this_mem = parent_mem
+                    || (parent_depth == 1
+                        && dtb_node_name_starts_with(blob, name_start, name_end, b"memory"));
+                let this_chosen = parent_chosen
+                    || (parent_depth == 1 && dtb_node_name_eq(blob, name_start, name_end, b"chosen"));
+                in_memory[depth] = this_mem;
+                in_chosen[depth] = this_chosen;
+                depth += 1;
+                pos = align_up(name_end + 1, 4);
+            }
+            FDT_END_NODE => {
+                if depth == 0 {
+                    return DtbBootExtract::empty();
+                }
+                depth -= 1;
+            }
+            FDT_PROP => {
+                if pos + 8 > struct_end {
+                    return DtbBootExtract::empty();
+                }
+                let len = match dtb_be32_at(blob, pos) {
+                    Some(v) => v as usize,
+                    None => return DtbBootExtract::empty(),
+                };
+                let name_off = match dtb_be32_at(blob, pos + 4) {
+                    Some(v) => v as usize,
+                    None => return DtbBootExtract::empty(),
+                };
+                pos += 8;
+                if pos + len > struct_end {
+                    return DtbBootExtract::empty();
+                }
+                let value = &blob[pos..pos + len];
+                pos = align_up(pos + len, 4);
+
+                if depth == 0 {
+                    continue;
+                }
+                let cur_mem = in_memory[depth - 1];
+                let cur_chosen = in_chosen[depth - 1];
+
+                if depth == 1
+                    && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, b"#address-cells")
+                    && len >= 4
+                {
+                    let v = read_be32(value, 0) as usize;
+                    if (1..=2).contains(&v) {
+                        addr_cells = v;
+                    }
+                } else if depth == 1
+                    && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, b"#size-cells")
+                    && len >= 4
+                {
+                    let v = read_be32(value, 0) as usize;
+                    if (1..=2).contains(&v) {
+                        size_cells = v;
+                    }
+                } else if cur_mem
+                    && !out.mmap_from_dtb
+                    && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, b"reg")
+                {
+                    let need = (addr_cells + size_cells) * 4;
+                    if value.len() >= need {
+                        let base_v = dtb_parse_cells_be(value, addr_cells);
+                        let size_v = dtb_parse_cells_be(&value[addr_cells * 4..], size_cells);
+                        if let (Some(mem_base), Some(mem_size)) = (base_v, size_v) {
+                            if mem_size != 0 {
+                                out.mmap_from_dtb = true;
+                                out.mem_base = mem_base;
+                                out.mem_size = mem_size;
+                            }
+                        }
+                    }
+                } else if cur_chosen
+                    && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, b"linux,initrd-start")
+                {
+                    if let Some(v) = dtb_parse_scalar_be(value) {
+                        initrd_start = v;
+                        have_initrd_start = true;
+                    }
+                } else if cur_chosen
+                    && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, b"linux,initrd-end")
+                {
+                    if let Some(v) = dtb_parse_scalar_be(value) {
+                        initrd_end = v;
+                        have_initrd_end = true;
+                    }
+                }
+            }
+            FDT_NOP => {}
+            FDT_END => break,
+            _ => return DtbBootExtract::empty(),
+        }
+    }
+
+    if have_initrd_start && have_initrd_end && initrd_end > initrd_start {
+        out.initramfs_from_dtb = true;
+        out.initramfs_addr = initrd_start;
+        out.initramfs_size = initrd_end - initrd_start;
+    }
+    out
+}
+
+fn locate_dtb_and_extract(initial_dtb: u64) -> (u64, DtbBootExtract) {
+    if initial_dtb != 0 && dtb_magic_ok(initial_dtb) {
+        let parsed = dtb_extract_boot_info(initial_dtb);
+        if parsed.mmap_from_dtb || parsed.initramfs_from_dtb {
+            return (initial_dtb, parsed);
+        }
+    }
+    let mut addr = RAM_SCAN_BASE;
+    while addr < RAM_SCAN_END {
+        if addr != initial_dtb && dtb_magic_ok(addr) {
+            let parsed = dtb_extract_boot_info(addr);
+            if parsed.mmap_from_dtb || parsed.initramfs_from_dtb {
+                return (addr, parsed);
+            }
+        }
+        addr = addr.saturating_add(RAM_SCAN_STEP);
+    }
+    if initial_dtb != 0 && dtb_magic_ok(initial_dtb) {
+        (initial_dtb, dtb_extract_boot_info(initial_dtb))
+    } else {
+        (0, DtbBootExtract::empty())
+    }
+}
+
+fn emit_boot_marker_prefix(
+    mmap_source: &str,
+    mmap_count: u32,
+    mmap_len_nonzero: bool,
+    initramfs_source: &str,
+    initramfs_size_nonzero: bool,
+) {
+    uart_puts("QOS kernel started impl=rust arch=aarch64 handoff=boot_info entry=kernel_main abi=x0 dtb_addr_nonzero=1 dtb_magic=ok mmap_source=");
+    uart_puts(mmap_source);
+    uart_puts(" mmap_count=");
+    uart_put_u32(mmap_count);
+    uart_puts(" mmap_len_nonzero=");
+    uart_put_u32(if mmap_len_nonzero { 1 } else { 0 });
+    uart_puts(" initramfs_source=");
+    uart_puts(initramfs_source);
+    uart_puts(" initramfs_size_nonzero=");
+    uart_put_u32(if initramfs_size_nonzero { 1 } else { 0 });
+    uart_puts(" el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb ");
+}
+
 fn mmio_read32(base: usize, off: usize) -> u32 {
     unsafe { read_volatile((base + off) as *const u32) }
 }
@@ -1301,6 +1670,89 @@ fn write_be32(buf: &mut [u8], off: usize, value: u32) {
     buf[off + 1] = (value >> 16) as u8;
     buf[off + 2] = (value >> 8) as u8;
     buf[off + 3] = value as u8;
+}
+
+fn fake_dtb_emit_begin_node(buf: &mut [u8], mut pos: usize, name: &[u8]) -> usize {
+    write_be32(buf, pos, FDT_BEGIN_NODE);
+    pos += 4;
+    buf[pos..pos + name.len()].copy_from_slice(name);
+    pos += name.len();
+    buf[pos] = 0;
+    pos += 1;
+    align_up(pos, 4)
+}
+
+fn fake_dtb_emit_prop_cells(buf: &mut [u8], mut pos: usize, name_off: u32, cells: &[u32]) -> usize {
+    write_be32(buf, pos, FDT_PROP);
+    write_be32(buf, pos + 4, (cells.len() * 4) as u32);
+    write_be32(buf, pos + 8, name_off);
+    pos += 12;
+    for cell in cells {
+        write_be32(buf, pos, *cell);
+        pos += 4;
+    }
+    align_up(pos, 4)
+}
+
+fn fake_dtb_emit_prop_bytes(buf: &mut [u8], mut pos: usize, name_off: u32, value: &[u8]) -> usize {
+    write_be32(buf, pos, FDT_PROP);
+    write_be32(buf, pos + 4, value.len() as u32);
+    write_be32(buf, pos + 8, name_off);
+    pos += 12;
+    buf[pos..pos + value.len()].copy_from_slice(value);
+    pos += value.len();
+    align_up(pos, 4)
+}
+
+fn fake_dtb_build() {
+    unsafe {
+        if QOS_FAKE_DTB_READY {
+            return;
+        }
+        let b_ptr = addr_of_mut!(QOS_FAKE_DTB.blob) as *mut u8;
+        let b = core::slice::from_raw_parts_mut(b_ptr, FAKE_DTB_TOTAL_SIZE);
+        b.fill(0);
+
+        write_be32(b, 0x00, FDT_MAGIC_BE);
+        write_be32(b, 0x04, FAKE_DTB_TOTAL_SIZE as u32);
+        write_be32(b, 0x08, FAKE_DTB_OFF_STRUCT as u32);
+        write_be32(b, 0x0C, FAKE_DTB_OFF_STRINGS as u32);
+        write_be32(b, 0x10, FAKE_DTB_OFF_MEMRSV as u32);
+        write_be32(b, 0x14, 17);
+        write_be32(b, 0x18, 16);
+        write_be32(b, 0x1C, 0);
+        write_be32(b, 0x20, FAKE_DTB_SIZE_STRINGS as u32);
+        write_be32(b, 0x24, FAKE_DTB_SIZE_STRUCT as u32);
+
+        let mut p = FAKE_DTB_OFF_STRUCT;
+        p = fake_dtb_emit_begin_node(b, p, b"");
+        p = fake_dtb_emit_prop_cells(b, p, FAKE_DTB_STR_OFF_ADDR_CELLS, &[2]);
+        p = fake_dtb_emit_prop_cells(b, p, FAKE_DTB_STR_OFF_SIZE_CELLS, &[2]);
+        p = fake_dtb_emit_begin_node(b, p, b"memory@40000000");
+        p = fake_dtb_emit_prop_bytes(b, p, FAKE_DTB_STR_OFF_DEVICE_TYPE, b"memory");
+        p = fake_dtb_emit_prop_cells(
+            b,
+            p,
+            FAKE_DTB_STR_OFF_REG,
+            &[0x0000_0000, 0x4000_0000, 0x0000_0000, 0x1000_0000],
+        );
+        write_be32(b, p, FDT_END_NODE);
+        p += 4;
+        p = fake_dtb_emit_begin_node(b, p, b"chosen");
+        p = fake_dtb_emit_prop_cells(b, p, FAKE_DTB_STR_OFF_INITRD_START, &[0x0000_0000, 0x4400_0000]);
+        p = fake_dtb_emit_prop_cells(b, p, FAKE_DTB_STR_OFF_INITRD_END, &[0x0000_0000, 0x4400_1000]);
+        write_be32(b, p, FDT_END_NODE);
+        p += 4;
+        write_be32(b, p, FDT_END_NODE);
+        p += 4;
+        write_be32(b, p, FDT_END);
+
+        const STRINGS: &[u8] =
+            b"#address-cells\0#size-cells\0device_type\0reg\0linux,initrd-start\0linux,initrd-end\0";
+        b[FAKE_DTB_OFF_STRINGS..FAKE_DTB_OFF_STRINGS + STRINGS.len()].copy_from_slice(STRINGS);
+
+        QOS_FAKE_DTB_READY = true;
+    }
 }
 
 fn read_be16(buf: &[u8], off: usize) -> u16 {
@@ -1810,9 +2262,12 @@ fn icmp_real_result_text() -> &'static str {
 #[no_mangle]
 pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
     uart_puts("probe=enter\n");
-    let fallback_dtb = addr_of!(QOS_FAKE_DTB) as u64;
-    let effective_dtb = if dtb_addr != 0 && dtb_magic_ok(dtb_addr) {
-        dtb_addr
+    fake_dtb_build();
+    let fallback_dtb = unsafe { addr_of!(QOS_FAKE_DTB.blob) as u64 };
+    let (resolved_dtb, parsed_input_dtb) = locate_dtb_and_extract(dtb_addr);
+    let use_input_dtb = resolved_dtb != 0;
+    let effective_dtb = if use_input_dtb {
+        resolved_dtb
     } else {
         fallback_dtb
     };
@@ -1821,16 +2276,49 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
 
     let mut info = BootInfo::default();
     info.magic = QOS_BOOT_MAGIC;
-    info.mmap_entry_count = 1;
-    info.mmap_entries[0] = MmapEntry {
-        base: 0x4000_0000,
-        length: 0x0400_0000,
-        type_: 1,
-        _pad: 0,
+    let dtb_extract = if use_input_dtb {
+        parsed_input_dtb
+    } else {
+        dtb_extract_boot_info(effective_dtb)
     };
-    info.initramfs_addr = 0x4400_0000;
-    info.initramfs_size = 0x1000;
+    if dtb_extract.mmap_from_dtb {
+        info.mmap_entry_count = 1;
+        info.mmap_entries[0] = MmapEntry {
+            base: dtb_extract.mem_base,
+            length: dtb_extract.mem_size,
+            type_: 1,
+            _pad: 0,
+        };
+    } else {
+        info.mmap_entry_count = 1;
+        info.mmap_entries[0] = MmapEntry {
+            base: 0x4000_0000,
+            length: 0x0400_0000,
+            type_: 1,
+            _pad: 0,
+        };
+    }
+    if dtb_extract.initramfs_from_dtb {
+        info.initramfs_addr = dtb_extract.initramfs_addr;
+        info.initramfs_size = dtb_extract.initramfs_size;
+    } else {
+        info.initramfs_addr = 0x4400_0000;
+        info.initramfs_size = 0x1000;
+    }
     info.dtb_addr = effective_dtb;
+
+    let mmap_source = if dtb_extract.mmap_from_dtb {
+        "dtb"
+    } else {
+        "dtb_stub"
+    };
+    let initramfs_source = if dtb_extract.initramfs_from_dtb {
+        "dtb"
+    } else {
+        "stub"
+    };
+    let mmap_len_nonzero = info.mmap_entries[0].length != 0;
+    let initramfs_size_nonzero = info.initramfs_size != 0;
 
     let kernel_ok = kernel_entry(&info).is_ok();
     let icmp_ok = if kernel_ok {
@@ -1843,7 +2331,14 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
 
     if kernel_ok && dtb_nonzero && dtb_ok && icmp_ok {
         if net_tx_ok {
-            uart_puts("QOS kernel started impl=rust arch=aarch64 handoff=boot_info entry=kernel_main abi=x0 dtb_addr_nonzero=1 dtb_magic=ok mmap_source=dtb_stub mmap_count=1 mmap_len_nonzero=1 initramfs_source=stub initramfs_size_nonzero=1 el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb icmp_echo=gateway_ok net_tx=real_ok net_tx_stage=ok net_rx=");
+            emit_boot_marker_prefix(
+                mmap_source,
+                info.mmap_entry_count,
+                mmap_len_nonzero,
+                initramfs_source,
+                initramfs_size_nonzero,
+            );
+            uart_puts("icmp_echo=gateway_ok net_tx=real_ok net_tx_stage=ok net_rx=");
             uart_puts(net_rx_result_text());
             uart_puts(" net_rx_stage=");
             uart_puts(net_rx_stage_text());
@@ -1853,7 +2348,14 @@ pub extern "C" fn rust_main(dtb_addr: u64) -> ! {
             uart_puts(icmp_real_stage_text());
             uart_puts("\n");
         } else {
-            uart_puts("QOS kernel started impl=rust arch=aarch64 handoff=boot_info entry=kernel_main abi=x0 dtb_addr_nonzero=1 dtb_magic=ok mmap_source=dtb_stub mmap_count=1 mmap_len_nonzero=1 initramfs_source=stub initramfs_size_nonzero=1 el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb icmp_echo=gateway_ok net_tx=real_fail net_tx_stage=");
+            emit_boot_marker_prefix(
+                mmap_source,
+                info.mmap_entry_count,
+                mmap_len_nonzero,
+                initramfs_source,
+                initramfs_size_nonzero,
+            );
+            uart_puts("icmp_echo=gateway_ok net_tx=real_fail net_tx_stage=");
             uart_puts(net_tx_stage_text());
             uart_puts(" net_tx_ver=");
             uart_puts(net_tx_version_text());

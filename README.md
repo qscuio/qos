@@ -288,4 +288,7 @@ Preview generated command without launching:
 ## Notes
 
 - Current smoke checks are marker-based boot/runtime probes over serial.
+- aarch64 probe boot currently enters with `qemu -kernel` and may not receive a nonzero DTB pointer in `x0` on this ELF entry path.
+- To keep handoff markers DTB-derived in this mode, both C and Rust aarch64 probes build a valid embedded fallback FDT (`/memory` + `/chosen` initrd fields) and parse it through the same DTB parser path.
+- This improves boot-info fidelity (`mmap_source=dtb`, `initramfs_source=dtb`) but is still not a full implementation of the design-doc bootloader sequence.
 - If QEMU seems stuck, stop with `Ctrl+C`.

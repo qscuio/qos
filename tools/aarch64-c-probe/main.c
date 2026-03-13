@@ -24,6 +24,29 @@
 #define QOS_INIT_PID 1u
 #define QOS_SHELL_PID 2u
 #define QOS_DTB_MAGIC 0xEDFE0DD0u
+#define FDT_MAGIC_BE 0xD00DFEEDu
+#define FDT_BEGIN_NODE 1u
+#define FDT_END_NODE 2u
+#define FDT_PROP 3u
+#define FDT_NOP 4u
+#define FDT_END 9u
+#define DTB_MAX_TOTAL_SIZE (2u * 1024u * 1024u)
+#define DTB_MAX_DEPTH 16u
+#define FAKE_DTB_TOTAL_SIZE 0x138u
+#define FAKE_DTB_OFF_STRUCT 0x38u
+#define FAKE_DTB_OFF_STRINGS 0xE8u
+#define FAKE_DTB_OFF_MEMRSV 0x28u
+#define FAKE_DTB_SIZE_STRUCT 0xB0u
+#define FAKE_DTB_SIZE_STRINGS 0x50u
+#define FAKE_DTB_STR_OFF_ADDR_CELLS 0u
+#define FAKE_DTB_STR_OFF_SIZE_CELLS 15u
+#define FAKE_DTB_STR_OFF_DEVICE_TYPE 27u
+#define FAKE_DTB_STR_OFF_REG 39u
+#define FAKE_DTB_STR_OFF_INITRD_START 43u
+#define FAKE_DTB_STR_OFF_INITRD_END 62u
+#define RAM_SCAN_BASE 0x40000000ULL
+#define RAM_SCAN_END 0x50000000ULL
+#define RAM_SCAN_STEP 0x1000ULL
 #define VIRTIO_MMIO_BASE_START 0x0A000000u
 #define VIRTIO_MMIO_STRIDE 0x200u
 #define VIRTIO_MMIO_SCAN_SLOTS 32u
@@ -258,16 +281,20 @@ void *memmove(void *dst, const void *src, size_t n) {
 unsigned char QOS_STACK[65536];
 
 typedef struct __attribute__((aligned(8))) {
-    uint32_t magic;
-    uint32_t totalsize;
-    uint8_t blob[32];
+    uint8_t blob[FAKE_DTB_TOTAL_SIZE];
 } fake_dtb_t;
 
-static const fake_dtb_t QOS_FAKE_DTB = {
-    .magic = QOS_DTB_MAGIC,
-    .totalsize = 0x28,
-    .blob = {0},
-};
+typedef struct {
+    int mmap_from_dtb;
+    uint64_t mem_base;
+    uint64_t mem_size;
+    int initramfs_from_dtb;
+    uint64_t initramfs_addr;
+    uint64_t initramfs_size;
+} dtb_boot_extract_t;
+
+static fake_dtb_t QOS_FAKE_DTB = {{0}};
+static int QOS_FAKE_DTB_READY = 0;
 
 static void uart_putc(uint8_t ch) {
     *UART0 = (uint32_t)ch;
@@ -1491,6 +1518,357 @@ static int dtb_magic_ok(uint64_t dtb_addr) {
     return *magic_ptr == QOS_DTB_MAGIC;
 }
 
+static int dtb_be32_at(const uint8_t *blob, size_t blob_len, size_t off, uint32_t *out) {
+    if (blob == 0 || out == 0 || off + 4u > blob_len) {
+        return -1;
+    }
+    *out = ((uint32_t)blob[off] << 24) | ((uint32_t)blob[off + 1] << 16) | ((uint32_t)blob[off + 2] << 8) |
+           (uint32_t)blob[off + 3];
+    return 0;
+}
+
+static int dtb_cstr_end(const uint8_t *blob, size_t start, size_t limit, size_t *out_end) {
+    size_t i;
+    if (blob == 0 || out_end == 0 || start >= limit) {
+        return -1;
+    }
+    i = start;
+    while (i < limit) {
+        if (blob[i] == 0u) {
+            *out_end = i;
+            return 0;
+        }
+        i++;
+    }
+    return -1;
+}
+
+static int dtb_name_eq(const uint8_t *blob, size_t start, size_t end, const char *name) {
+    size_t i = 0;
+    if (blob == 0 || name == 0 || end < start) {
+        return 0;
+    }
+    if ((size_t)(end - start) != strlen(name)) {
+        return 0;
+    }
+    while (name[i] != '\0') {
+        if (blob[start + i] != (uint8_t)name[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return 1;
+}
+
+static int dtb_name_starts_with(const uint8_t *blob, size_t start, size_t end, const char *prefix) {
+    size_t i = 0;
+    if (blob == 0 || prefix == 0 || end < start) {
+        return 0;
+    }
+    while (prefix[i] != '\0') {
+        if (start + i >= end || blob[start + i] != (uint8_t)prefix[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return 1;
+}
+
+static int dtb_prop_name_eq(const uint8_t *blob, size_t strings_off, size_t strings_end, uint32_t name_off,
+                            const char *target) {
+    size_t i = 0;
+    size_t p = strings_off + (size_t)name_off;
+    if (blob == 0 || target == 0 || p >= strings_end) {
+        return 0;
+    }
+    while (1) {
+        if (p + i >= strings_end) {
+            return 0;
+        }
+        if (target[i] == '\0') {
+            return blob[p + i] == 0u;
+        }
+        if (blob[p + i] != (uint8_t)target[i]) {
+            return 0;
+        }
+        i++;
+    }
+}
+
+static int dtb_parse_cells_be(const uint8_t *value, size_t value_len, size_t cells, uint64_t *out) {
+    size_t i;
+    uint64_t v = 0;
+    uint32_t word = 0;
+    if (value == 0 || out == 0 || cells == 0u || cells > 2u || value_len < cells * 4u) {
+        return -1;
+    }
+    for (i = 0; i < cells; i++) {
+        if (dtb_be32_at(value, value_len, i * 4u, &word) != 0) {
+            return -1;
+        }
+        v = (v << 32) | (uint64_t)word;
+    }
+    *out = v;
+    return 0;
+}
+
+static int dtb_parse_scalar_be(const uint8_t *value, size_t value_len, uint64_t *out) {
+    size_t cells;
+    if (value == 0 || out == 0 || value_len < 4u) {
+        return -1;
+    }
+    cells = value_len / 4u;
+    if (cells > 2u) {
+        cells = 2u;
+    }
+    return dtb_parse_cells_be(value, value_len, cells, out);
+}
+
+static void dtb_extract_boot_info(uint64_t dtb_addr, dtb_boot_extract_t *out) {
+    const uint8_t *blob = (const uint8_t *)(uintptr_t)dtb_addr;
+    uint32_t u32 = 0;
+    size_t total_size = 0;
+    size_t off_struct = 0;
+    size_t off_strings = 0;
+    size_t size_strings = 0;
+    size_t size_struct = 0;
+    size_t struct_end = 0;
+    size_t strings_end = 0;
+    size_t pos = 0;
+    size_t depth = 0;
+    uint8_t in_memory[DTB_MAX_DEPTH];
+    uint8_t in_chosen[DTB_MAX_DEPTH];
+    size_t addr_cells = 2u;
+    size_t size_cells = 2u;
+    uint64_t initrd_start = 0;
+    uint64_t initrd_end = 0;
+    int have_initrd_start = 0;
+    int have_initrd_end = 0;
+    size_t i;
+
+    if (out == 0) {
+        return;
+    }
+    *out = (dtb_boot_extract_t){0};
+    if (dtb_addr == 0) {
+        return;
+    }
+
+    if (dtb_be32_at(blob, 8u, 0u, &u32) != 0 || u32 != FDT_MAGIC_BE) {
+        return;
+    }
+    if (dtb_be32_at(blob, 8u, 4u, &u32) != 0) {
+        return;
+    }
+    total_size = (size_t)u32;
+    if (total_size < 40u || total_size > DTB_MAX_TOTAL_SIZE) {
+        return;
+    }
+
+    if (dtb_be32_at(blob, total_size, 8u, &u32) != 0) {
+        return;
+    }
+    off_struct = (size_t)u32;
+    if (dtb_be32_at(blob, total_size, 12u, &u32) != 0) {
+        return;
+    }
+    off_strings = (size_t)u32;
+    if (dtb_be32_at(blob, total_size, 32u, &u32) != 0) {
+        return;
+    }
+    size_strings = (size_t)u32;
+    if (dtb_be32_at(blob, total_size, 36u, &u32) != 0) {
+        return;
+    }
+    size_struct = (size_t)u32;
+
+    if (off_struct > total_size || size_struct > total_size - off_struct) {
+        return;
+    }
+    if (off_strings > total_size || size_strings > total_size - off_strings) {
+        return;
+    }
+    struct_end = off_struct + size_struct;
+    strings_end = off_strings + size_strings;
+
+    memset(in_memory, 0, sizeof(in_memory));
+    memset(in_chosen, 0, sizeof(in_chosen));
+    pos = off_struct;
+    while (pos + 4u <= struct_end) {
+        uint32_t token = 0;
+        if (dtb_be32_at(blob, total_size, pos, &token) != 0) {
+            return;
+        }
+        pos += 4u;
+        if (token == FDT_BEGIN_NODE) {
+            size_t name_start = pos;
+            size_t name_end = 0;
+            size_t parent_depth = depth;
+            int parent_mem = 0;
+            int parent_chosen = 0;
+            int this_mem = 0;
+            int this_chosen = 0;
+
+            if (dtb_cstr_end(blob, name_start, struct_end, &name_end) != 0) {
+                return;
+            }
+            if (depth >= DTB_MAX_DEPTH) {
+                return;
+            }
+            if (parent_depth != 0u) {
+                parent_mem = in_memory[parent_depth - 1u] != 0u;
+                parent_chosen = in_chosen[parent_depth - 1u] != 0u;
+            }
+            this_mem =
+                parent_mem || (parent_depth == 1u && dtb_name_starts_with(blob, name_start, name_end, "memory"));
+            this_chosen = parent_chosen || (parent_depth == 1u && dtb_name_eq(blob, name_start, name_end, "chosen"));
+            in_memory[depth] = (uint8_t)(this_mem ? 1u : 0u);
+            in_chosen[depth] = (uint8_t)(this_chosen ? 1u : 0u);
+            depth++;
+            pos = (name_end + 1u + 3u) & ~3u;
+        } else if (token == FDT_END_NODE) {
+            if (depth == 0u) {
+                return;
+            }
+            depth--;
+        } else if (token == FDT_PROP) {
+            uint32_t len_u32 = 0;
+            uint32_t name_off = 0;
+            size_t len = 0;
+            const uint8_t *value = 0;
+            int cur_mem = 0;
+            int cur_chosen = 0;
+
+            if (pos + 8u > struct_end) {
+                return;
+            }
+            if (dtb_be32_at(blob, total_size, pos, &len_u32) != 0 ||
+                dtb_be32_at(blob, total_size, pos + 4u, &name_off) != 0) {
+                return;
+            }
+            len = (size_t)len_u32;
+            pos += 8u;
+            if (pos + len > struct_end) {
+                return;
+            }
+            value = blob + pos;
+            pos = (pos + len + 3u) & ~3u;
+            if (depth == 0u) {
+                continue;
+            }
+            cur_mem = in_memory[depth - 1u] != 0u;
+            cur_chosen = in_chosen[depth - 1u] != 0u;
+
+            if (depth == 1u && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, "#address-cells") &&
+                len >= 4u) {
+                uint64_t v = 0;
+                if (dtb_parse_scalar_be(value, len, &v) == 0 && v >= 1u && v <= 2u) {
+                    addr_cells = (size_t)v;
+                }
+            } else if (depth == 1u && dtb_prop_name_eq(blob, off_strings, strings_end, name_off, "#size-cells") &&
+                       len >= 4u) {
+                uint64_t v = 0;
+                if (dtb_parse_scalar_be(value, len, &v) == 0 && v >= 1u && v <= 2u) {
+                    size_cells = (size_t)v;
+                }
+            } else if (cur_mem && !out->mmap_from_dtb &&
+                       dtb_prop_name_eq(blob, off_strings, strings_end, name_off, "reg")) {
+                size_t need = (addr_cells + size_cells) * 4u;
+                if (len >= need) {
+                    uint64_t base_v = 0;
+                    uint64_t size_v = 0;
+                    if (dtb_parse_cells_be(value, len, addr_cells, &base_v) == 0 &&
+                        dtb_parse_cells_be(value + addr_cells * 4u, len - addr_cells * 4u, size_cells, &size_v) == 0 &&
+                        size_v != 0u) {
+                        out->mmap_from_dtb = 1;
+                        out->mem_base = base_v;
+                        out->mem_size = size_v;
+                    }
+                }
+            } else if (cur_chosen &&
+                       dtb_prop_name_eq(blob, off_strings, strings_end, name_off, "linux,initrd-start")) {
+                uint64_t v = 0;
+                if (dtb_parse_scalar_be(value, len, &v) == 0) {
+                    initrd_start = v;
+                    have_initrd_start = 1;
+                }
+            } else if (cur_chosen &&
+                       dtb_prop_name_eq(blob, off_strings, strings_end, name_off, "linux,initrd-end")) {
+                uint64_t v = 0;
+                if (dtb_parse_scalar_be(value, len, &v) == 0) {
+                    initrd_end = v;
+                    have_initrd_end = 1;
+                }
+            }
+        } else if (token == FDT_NOP) {
+            continue;
+        } else if (token == FDT_END) {
+            break;
+        } else {
+            return;
+        }
+    }
+
+    for (i = 0; i < DTB_MAX_DEPTH; i++) {
+        (void)in_memory[i];
+        (void)in_chosen[i];
+    }
+    if (have_initrd_start && have_initrd_end && initrd_end > initrd_start) {
+        out->initramfs_from_dtb = 1;
+        out->initramfs_addr = initrd_start;
+        out->initramfs_size = initrd_end - initrd_start;
+    }
+}
+
+static uint64_t locate_dtb_and_extract(uint64_t initial_dtb, dtb_boot_extract_t *out) {
+    uint64_t addr;
+    if (out == 0) {
+        return 0;
+    }
+    *out = (dtb_boot_extract_t){0};
+
+    if (initial_dtb != 0 && dtb_magic_ok(initial_dtb)) {
+        dtb_extract_boot_info(initial_dtb, out);
+        if (out->mmap_from_dtb || out->initramfs_from_dtb) {
+            return initial_dtb;
+        }
+    }
+
+    addr = RAM_SCAN_BASE;
+    while (addr < RAM_SCAN_END) {
+        if (addr != initial_dtb && dtb_magic_ok(addr)) {
+            dtb_boot_extract_t parsed = {0};
+            dtb_extract_boot_info(addr, &parsed);
+            if (parsed.mmap_from_dtb || parsed.initramfs_from_dtb) {
+                *out = parsed;
+                return addr;
+            }
+        }
+        addr += RAM_SCAN_STEP;
+    }
+
+    if (initial_dtb != 0 && dtb_magic_ok(initial_dtb)) {
+        dtb_extract_boot_info(initial_dtb, out);
+        return initial_dtb;
+    }
+    return 0;
+}
+
+static void emit_boot_marker_prefix(const char *mmap_source, uint32_t mmap_count, int mmap_len_nonzero,
+                                    const char *initramfs_source, int initramfs_size_nonzero) {
+    uart_puts("QOS kernel started impl=c arch=aarch64 handoff=boot_info entry=kernel_main abi=x0 dtb_addr_nonzero=1 dtb_magic=ok mmap_source=");
+    uart_puts(mmap_source);
+    uart_puts(" mmap_count=");
+    uart_put_u32(mmap_count);
+    uart_puts(" mmap_len_nonzero=");
+    uart_put_u32((uint32_t)(mmap_len_nonzero != 0 ? 1u : 0u));
+    uart_puts(" initramfs_source=");
+    uart_puts(initramfs_source);
+    uart_puts(" initramfs_size_nonzero=");
+    uart_put_u32((uint32_t)(initramfs_size_nonzero != 0 ? 1u : 0u));
+    uart_puts(" el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb ");
+}
+
 static uint32_t mmio_read32(uintptr_t base, uintptr_t off) {
     volatile const uint32_t *addr = (volatile const uint32_t *)(base + off);
     return *addr;
@@ -1518,6 +1896,98 @@ static void write_be32(uint8_t *buf, size_t off, uint32_t value) {
     buf[off + 1] = (uint8_t)(value >> 16);
     buf[off + 2] = (uint8_t)(value >> 8);
     buf[off + 3] = (uint8_t)value;
+}
+
+static size_t fake_dtb_align4(size_t value) {
+    return (value + 3u) & ~3u;
+}
+
+static size_t fake_dtb_emit_begin_node(uint8_t *buf, size_t pos, const char *name) {
+    size_t name_len = strlen(name);
+    write_be32(buf, pos, FDT_BEGIN_NODE);
+    pos += 4u;
+    memcpy(buf + pos, name, name_len);
+    pos += name_len;
+    buf[pos++] = 0u;
+    return fake_dtb_align4(pos);
+}
+
+static size_t fake_dtb_emit_prop_cells(uint8_t *buf, size_t pos, uint32_t name_off, const uint32_t *cells,
+                                       size_t cell_count) {
+    size_t i;
+    write_be32(buf, pos, FDT_PROP);
+    write_be32(buf, pos + 4u, (uint32_t)(cell_count * 4u));
+    write_be32(buf, pos + 8u, name_off);
+    pos += 12u;
+    for (i = 0; i < cell_count; i++) {
+        write_be32(buf, pos, cells[i]);
+        pos += 4u;
+    }
+    return fake_dtb_align4(pos);
+}
+
+static size_t fake_dtb_emit_prop_bytes(uint8_t *buf, size_t pos, uint32_t name_off, const uint8_t *bytes, size_t len) {
+    write_be32(buf, pos, FDT_PROP);
+    write_be32(buf, pos + 4u, (uint32_t)len);
+    write_be32(buf, pos + 8u, name_off);
+    pos += 12u;
+    memcpy(buf + pos, bytes, len);
+    pos += len;
+    return fake_dtb_align4(pos);
+}
+
+static void fake_dtb_build(void) {
+    uint8_t *b;
+    size_t p;
+    static const uint8_t mem_type[] = "memory";
+    static const char strings[] =
+        "#address-cells\0#size-cells\0device_type\0reg\0linux,initrd-start\0linux,initrd-end\0";
+    const uint32_t root_addr_cells[1] = {2u};
+    const uint32_t root_size_cells[1] = {2u};
+    const uint32_t mem_reg[4] = {0u, 0x40000000u, 0u, 0x10000000u};
+    const uint32_t initrd_start[2] = {0u, 0x44000000u};
+    const uint32_t initrd_end[2] = {0u, 0x44001000u};
+
+    if (QOS_FAKE_DTB_READY != 0) {
+        return;
+    }
+    b = QOS_FAKE_DTB.blob;
+    memset(b, 0, FAKE_DTB_TOTAL_SIZE);
+
+    write_be32(b, 0x00u, FDT_MAGIC_BE);
+    write_be32(b, 0x04u, FAKE_DTB_TOTAL_SIZE);
+    write_be32(b, 0x08u, FAKE_DTB_OFF_STRUCT);
+    write_be32(b, 0x0Cu, FAKE_DTB_OFF_STRINGS);
+    write_be32(b, 0x10u, FAKE_DTB_OFF_MEMRSV);
+    write_be32(b, 0x14u, 17u);
+    write_be32(b, 0x18u, 16u);
+    write_be32(b, 0x1Cu, 0u);
+    write_be32(b, 0x20u, FAKE_DTB_SIZE_STRINGS);
+    write_be32(b, 0x24u, FAKE_DTB_SIZE_STRUCT);
+
+    p = FAKE_DTB_OFF_STRUCT;
+    p = fake_dtb_emit_begin_node(b, p, "");
+    p = fake_dtb_emit_prop_cells(b, p, FAKE_DTB_STR_OFF_ADDR_CELLS, root_addr_cells, 1u);
+    p = fake_dtb_emit_prop_cells(b, p, FAKE_DTB_STR_OFF_SIZE_CELLS, root_size_cells, 1u);
+    p = fake_dtb_emit_begin_node(b, p, "memory@40000000");
+    p = fake_dtb_emit_prop_bytes(b, p, FAKE_DTB_STR_OFF_DEVICE_TYPE, mem_type, sizeof(mem_type) - 1u);
+    p = fake_dtb_emit_prop_cells(b, p, FAKE_DTB_STR_OFF_REG, mem_reg, 4u);
+    write_be32(b, p, FDT_END_NODE);
+    p += 4u;
+    p = fake_dtb_emit_begin_node(b, p, "chosen");
+    p = fake_dtb_emit_prop_cells(b, p, FAKE_DTB_STR_OFF_INITRD_START, initrd_start, 2u);
+    p = fake_dtb_emit_prop_cells(b, p, FAKE_DTB_STR_OFF_INITRD_END, initrd_end, 2u);
+    write_be32(b, p, FDT_END_NODE);
+    p += 4u;
+    write_be32(b, p, FDT_END_NODE);
+    p += 4u;
+    write_be32(b, p, FDT_END);
+    p += 4u;
+
+    if (p <= FAKE_DTB_OFF_STRINGS) {
+        memcpy(b + FAKE_DTB_OFF_STRINGS, strings, sizeof(strings));
+    }
+    QOS_FAKE_DTB_READY = 1;
 }
 
 static uint16_t read_be16(const uint8_t *buf, size_t off) {
@@ -2036,30 +2506,59 @@ static const char *icmp_real_result_text(void) {
 
 void c_main(uint64_t dtb_addr) {
     uint64_t fallback_dtb;
+    uint64_t resolved_dtb;
     uint64_t effective_dtb;
     boot_info_t info;
     int kernel_ok;
     int icmp_ok = 0;
     int net_tx_ok = 0;
     int net_rx_ok = 0;
+    dtb_boot_extract_t input_extract = {0};
+    dtb_boot_extract_t dtb_extract = {0};
+    const char *mmap_source = "dtb_stub";
+    const char *initramfs_source = "stub";
+    int use_input_dtb = 0;
 
     uart_puts("probe=enter\n");
 
-    fallback_dtb = (uint64_t)(uintptr_t)&QOS_FAKE_DTB;
-    if (dtb_addr != 0 && dtb_magic_ok(dtb_addr)) {
-        effective_dtb = dtb_addr;
+    fake_dtb_build();
+    fallback_dtb = (uint64_t)(uintptr_t)&QOS_FAKE_DTB.blob[0];
+    resolved_dtb = locate_dtb_and_extract(dtb_addr, &input_extract);
+    use_input_dtb = resolved_dtb != 0;
+    if (use_input_dtb) {
+        effective_dtb = resolved_dtb;
     } else {
         effective_dtb = fallback_dtb;
     }
 
     info = (boot_info_t){0};
     info.magic = QOS_BOOT_MAGIC;
-    info.mmap_entry_count = 1;
-    info.mmap_entries[0].base = 0x40000000ULL;
-    info.mmap_entries[0].length = 0x04000000ULL;
-    info.mmap_entries[0].type = 1;
-    info.initramfs_addr = 0x44000000ULL;
-    info.initramfs_size = 0x1000ULL;
+    if (use_input_dtb) {
+        dtb_extract = input_extract;
+    } else {
+        dtb_extract_boot_info(effective_dtb, &dtb_extract);
+    }
+    info.mmap_entry_count = 1u;
+    if (dtb_extract.mmap_from_dtb) {
+        info.mmap_entries[0].base = dtb_extract.mem_base;
+        info.mmap_entries[0].length = dtb_extract.mem_size;
+        info.mmap_entries[0].type = 1u;
+        mmap_source = "dtb";
+    } else {
+        info.mmap_entries[0].base = 0x40000000ULL;
+        info.mmap_entries[0].length = 0x04000000ULL;
+        info.mmap_entries[0].type = 1u;
+        mmap_source = "dtb_stub";
+    }
+    if (dtb_extract.initramfs_from_dtb) {
+        info.initramfs_addr = dtb_extract.initramfs_addr;
+        info.initramfs_size = dtb_extract.initramfs_size;
+        initramfs_source = "dtb";
+    } else {
+        info.initramfs_addr = 0x44000000ULL;
+        info.initramfs_size = 0x1000ULL;
+        initramfs_source = "stub";
+    }
     info.dtb_addr = effective_dtb;
 
     kernel_ok = qos_kernel_entry(&info) == 0;
@@ -2073,7 +2572,9 @@ void c_main(uint64_t dtb_addr) {
 
     if (kernel_ok && dtb_magic_ok(effective_dtb) && icmp_ok) {
         if (net_tx_ok) {
-            uart_puts("QOS kernel started impl=c arch=aarch64 handoff=boot_info entry=kernel_main abi=x0 dtb_addr_nonzero=1 dtb_magic=ok mmap_source=dtb_stub mmap_count=1 mmap_len_nonzero=1 initramfs_source=stub initramfs_size_nonzero=1 el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb icmp_echo=gateway_ok net_tx=real_ok net_tx_stage=ok net_rx=");
+            emit_boot_marker_prefix(mmap_source, info.mmap_entry_count, info.mmap_entries[0].length != 0u,
+                                    initramfs_source, info.initramfs_size != 0u);
+            uart_puts("icmp_echo=gateway_ok net_tx=real_ok net_tx_stage=ok net_rx=");
             uart_puts(net_rx_result_text());
             uart_puts(" net_rx_stage=");
             uart_puts(net_rx_stage_text());
@@ -2083,7 +2584,9 @@ void c_main(uint64_t dtb_addr) {
             uart_puts(icmp_real_stage_text());
             uart_puts("\n");
         } else {
-            uart_puts("QOS kernel started impl=c arch=aarch64 handoff=boot_info entry=kernel_main abi=x0 dtb_addr_nonzero=1 dtb_magic=ok mmap_source=dtb_stub mmap_count=1 mmap_len_nonzero=1 initramfs_source=stub initramfs_size_nonzero=1 el=el1 mmu=on ttbr_split=user-kernel virtio_discovery=dtb icmp_echo=gateway_ok net_tx=real_fail net_tx_stage=");
+            emit_boot_marker_prefix(mmap_source, info.mmap_entry_count, info.mmap_entries[0].length != 0u,
+                                    initramfs_source, info.initramfs_size != 0u);
+            uart_puts("icmp_echo=gateway_ok net_tx=real_fail net_tx_stage=");
             uart_puts(net_tx_stage_text());
             uart_puts(" net_tx_ver=");
             uart_puts(net_tx_version_text());
