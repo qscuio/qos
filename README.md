@@ -4,6 +4,7 @@ QOS is a dual-implementation OS workspace:
 
 - `c-os/`: C implementation
 - `rust-os/`: Rust implementation
+- `xv6/`: xv6-x86 (MIT teaching OS, i386, reference bootable OS)
 
 The current repository focuses on a testable scaffold with kernel/libc/userspace contracts and QEMU smoke flows.
 
