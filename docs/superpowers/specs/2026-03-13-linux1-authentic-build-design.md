@@ -47,6 +47,7 @@ qos/
 │   ├── fetch_linux1_sources.sh          # fetch pinned external sources + verify SHA256
 │   ├── verify_linux1_provenance.sh      # rebuild upstream+patches and compare to committed tree
 │   ├── build_linux1_kernel.sh           # build Linux 1.0.0 with compatibility flags/patches
+│   ├── build_linux1_lilo.sh             # build lilo from pinned source + patches
 │   ├── build_linux1_userspace.sh        # build minimal static userspace
 │   ├── mk_linux1_disk.sh                # create partitioned disk, ext2 rootfs, install bootloader
 │   └── run_linux1_qemu.sh               # run BIOS disk boot in qemu-system-i386
@@ -72,6 +73,7 @@ External sources required for authentic boot flow (for example LILO source tarba
 Provenance contract:
 - `linux-1.0.0/` is the canonical local learning tree.
 - `scripts/verify_linux1_provenance.sh` must reproduce a clean upstream extraction, apply the patch stack, and verify tree equivalence to committed `linux-1.0.0/` (ignoring generated files).
+- The same provenance verification must cover LILO: pinned source archive, optional `patches/lilo/*.patch`, and deterministic artifact checks for `build_linux1_lilo.sh` outputs.
 - The verification command is part of CI for Linux1-related changes.
 
 ## Compatibility Patch Policy
@@ -96,9 +98,10 @@ Patch governance:
 
 1. `fetch`: Download and verify external historical sources.
 2. `build-kernel`: Build Linux 1.0.0 i386 kernel from local source with minimal compatibility patches.
-3. `build-userspace`: Build in-repo minimal static userspace binaries (`/sbin/init`, `/bin/sh`, tiny core tools).
-4. `mk-disk`: Create raw disk image, partition it, format ext2 root, install kernel and userspace, install LILO to MBR.
-5. `run`: Boot QEMU with `-hda <disk.img>` and serial output capture.
+3. `build-lilo`: Build LILO from pinned source with minimal compatibility patches.
+4. `build-userspace`: Build in-repo minimal static userspace binaries (`/sbin/init`, `/bin/sh`, tiny core tools).
+5. `mk-disk`: Create raw disk image, partition it, format ext2 root, install kernel and userspace, install LILO to MBR.
+6. `run`: Boot QEMU with `-hda <disk.img>` and serial output capture.
 
 Authentic boot requirement: no direct `qemu -kernel` in the primary smoke path.
 
@@ -115,6 +118,10 @@ Each script has a strict interface so units are independently testable and compo
   - Outputs: kernel image under `build/linux1/kernel/`
   - Env: `LINUX1_JOBS` optional parallelism
   - Exit codes: non-zero on patch or build failure
+- `build_linux1_lilo.sh`
+  - Inputs: pinned LILO source from `build/linux1/sources/` and optional `patches/lilo/*.patch`
+  - Outputs: LILO install artifacts under `build/linux1/lilo/`
+  - Exit codes: non-zero on patch/configure/build failure
 - `build_linux1_userspace.sh`
   - Inputs: `linux1-userspace/`
   - Outputs: staged rootfs files under `build/linux1/rootfs/`
@@ -198,7 +205,8 @@ Minimum staged root filesystem contents:
 - write `linux1-init: start` to console
 - ensure stdio is bound to `/dev/console`
 - spawn `/bin/sh`
-- if shell exits, print `linux1-init: shell exited` and halt/reboot path is explicit
+- if shell exits, print `linux1-init: shell exited` and respawn `/bin/sh`
+- VM termination is not expected from shell exit; smoke harness controls process lifetime and terminates QEMU after marker capture/timeout
 
 ## Error Handling and Determinism
 
