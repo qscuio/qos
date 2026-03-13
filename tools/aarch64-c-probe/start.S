@@ -21,24 +21,32 @@ _start:
     mrs  x20, sctlr_el1
     tbnz x20, #0, 2f
 
-    adrp x21, qos_l0_table
-    add  x21, x21, :lo12:qos_l0_table
-    adrp x22, qos_l1_table
-    add  x22, x22, :lo12:qos_l1_table
+    adrp x21, qos_ttbr0_l0_table
+    add  x21, x21, :lo12:qos_ttbr0_l0_table
+    adrp x22, qos_ttbr1_l0_table
+    add  x22, x22, :lo12:qos_ttbr1_l0_table
+    adrp x25, qos_ttbr0_l1_table
+    add  x25, x25, :lo12:qos_ttbr0_l1_table
+    adrp x26, qos_ttbr1_l1_table
+    add  x26, x26, :lo12:qos_ttbr1_l1_table
 
-    orr  x23, x22, #0x3
+    orr  x23, x25, #0x3
     str  x23, [x21]
-    str  x23, [x21, #4088]
+    orr  x23, x26, #0x3
+    str  x23, [x22, #4088]
 
     ldr  x24, =0x0060000000000401
-    str  x24, [x22]
+    str  x24, [x25]
     ldr  x24, =0x0000000040000705
-    str  x24, [x22, #8]
+    str  x24, [x25, #8]
+    str  x24, [x26, #4080]
+    ldr  x24, =0x0060000000000401
+    str  x24, [x26, #4088]
 
     ldr  x24, =0x000000000000ff00
     msr  mair_el1, x24
     msr  ttbr0_el1, x21
-    msr  ttbr1_el1, x21
+    msr  ttbr1_el1, x22
     ldr  x24, =0x00000005b5103510
     msr  tcr_el1, x24
     dsb  ish
@@ -62,8 +70,14 @@ _start:
 
 .section .bss, "aw", %nobits
 .balign 4096
-qos_l0_table:
+qos_ttbr0_l0_table:
     .space 4096
 .balign 4096
-qos_l1_table:
+qos_ttbr1_l0_table:
+    .space 4096
+.balign 4096
+qos_ttbr0_l1_table:
+    .space 4096
+.balign 4096
+qos_ttbr1_l1_table:
     .space 4096

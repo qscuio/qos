@@ -163,6 +163,10 @@ and `tools/aarch64-probe/src/main.rs`):
 - If MMU is off, install a minimal identity map and enable MMU:
   - `0x0000_0000..0x3FFF_FFFF`: device attributes (MMIO)
   - `0x4000_0000..0x7FFF_FFFF`: normal cacheable memory (RAM/kernel image)
+- Program separate translation roots:
+  - `TTBR0_EL1`: low-address map (`L0[0]`) for current execution/user side
+  - `TTBR1_EL1`: high-address map (`L0[511]`) including kernel alias window
+    at `0xFFFF_FFFF_8000_0000` -> PA `0x4000_0000`
 - Export `__kernel_phys_start` / `__kernel_phys_end` from AArch64 linkers, and
   reserve this physical range in Rust PMM initialization.
 
