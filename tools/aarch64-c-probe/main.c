@@ -387,21 +387,6 @@ typedef struct {
     uint8_t cmd_id;
 } qos_user_elf_t;
 
-static const qos_user_elf_t QOS_USER_ELFS[] = {
-    {"/bin/echo", qos_cmd_echo_elf, sizeof(qos_cmd_echo_elf), QOS_ELF_CMD_ECHO},
-    {"/bin/ps", qos_cmd_ps_elf, sizeof(qos_cmd_ps_elf), QOS_ELF_CMD_PS},
-    {"/bin/ping", qos_cmd_ping_elf, sizeof(qos_cmd_ping_elf), QOS_ELF_CMD_PING},
-    {"/bin/ip", qos_cmd_ip_elf, sizeof(qos_cmd_ip_elf), QOS_ELF_CMD_IP},
-    {"/bin/wget", qos_cmd_wget_elf, sizeof(qos_cmd_wget_elf), QOS_ELF_CMD_WGET},
-    {"/bin/ls", qos_cmd_ls_elf, sizeof(qos_cmd_ls_elf), QOS_ELF_CMD_LS},
-    {"/bin/cat", qos_cmd_cat_elf, sizeof(qos_cmd_cat_elf), QOS_ELF_CMD_CAT},
-    {"/bin/touch", qos_cmd_touch_elf, sizeof(qos_cmd_touch_elf), QOS_ELF_CMD_TOUCH},
-    {"/bin/edit", qos_cmd_edit_elf, sizeof(qos_cmd_edit_elf), QOS_ELF_CMD_EDIT},
-    {"/bin/insmod", qos_cmd_insmod_elf, sizeof(qos_cmd_insmod_elf), QOS_ELF_CMD_INSMOD},
-    {"/bin/rmmod", qos_cmd_rmmod_elf, sizeof(qos_cmd_rmmod_elf), QOS_ELF_CMD_RMMOD},
-    {"/bin/wqdemo", qos_cmd_wqdemo_elf, sizeof(qos_cmd_wqdemo_elf), QOS_ELF_CMD_WQDEMO},
-};
-
 static uint32_t g_next_pid = 3u;
 static char g_shell_files[64][128];
 static uint8_t g_shell_file_used[64];
@@ -682,17 +667,32 @@ static void shell_ps_line(char *out, size_t out_cap, uint32_t pid, int32_t ppid,
     shell_out_append(out, out_cap, "\n");
 }
 
-static const qos_user_elf_t *lookup_user_elf(const char *path) {
-    size_t i;
-    if (path == 0) {
-        return 0;
+static int lookup_user_elf(const char *path, qos_user_elf_t *out) {
+    if (path == 0 || out == 0) {
+        return -1;
     }
-    for (i = 0; i < QOS_ARRAY_LEN(QOS_USER_ELFS); i++) {
-        if (strcmp(path, QOS_USER_ELFS[i].path) == 0) {
-            return &QOS_USER_ELFS[i];
-        }
+#define QOS_MATCH_ELF(p, name, id) \
+    if (strcmp(path, p) == 0) { \
+        out->path = p; \
+        out->image = name; \
+        out->image_len = sizeof(name); \
+        out->cmd_id = id; \
+        return 0; \
     }
-    return 0;
+    QOS_MATCH_ELF("/bin/echo", qos_cmd_echo_elf, QOS_ELF_CMD_ECHO)
+    QOS_MATCH_ELF("/bin/ps", qos_cmd_ps_elf, QOS_ELF_CMD_PS)
+    QOS_MATCH_ELF("/bin/ping", qos_cmd_ping_elf, QOS_ELF_CMD_PING)
+    QOS_MATCH_ELF("/bin/ip", qos_cmd_ip_elf, QOS_ELF_CMD_IP)
+    QOS_MATCH_ELF("/bin/wget", qos_cmd_wget_elf, QOS_ELF_CMD_WGET)
+    QOS_MATCH_ELF("/bin/ls", qos_cmd_ls_elf, QOS_ELF_CMD_LS)
+    QOS_MATCH_ELF("/bin/cat", qos_cmd_cat_elf, QOS_ELF_CMD_CAT)
+    QOS_MATCH_ELF("/bin/touch", qos_cmd_touch_elf, QOS_ELF_CMD_TOUCH)
+    QOS_MATCH_ELF("/bin/edit", qos_cmd_edit_elf, QOS_ELF_CMD_EDIT)
+    QOS_MATCH_ELF("/bin/insmod", qos_cmd_insmod_elf, QOS_ELF_CMD_INSMOD)
+    QOS_MATCH_ELF("/bin/rmmod", qos_cmd_rmmod_elf, QOS_ELF_CMD_RMMOD)
+    QOS_MATCH_ELF("/bin/wqdemo", qos_cmd_wqdemo_elf, QOS_ELF_CMD_WQDEMO)
+#undef QOS_MATCH_ELF
+    return -1;
 }
 
 static uint16_t elf_u16(const uint8_t *p) {
@@ -830,7 +830,7 @@ static int validate_elf_image(const uint8_t *image, size_t len) {
 }
 
 static const char *resolve_command_path(const char *cmd, char *resolved, size_t cap) {
-    const qos_user_elf_t *entry;
+    qos_user_elf_t entry;
     size_t i;
     size_t j = 0;
     static const char prefix[] = "/bin/";
@@ -839,8 +839,7 @@ static const char *resolve_command_path(const char *cmd, char *resolved, size_t 
     }
     for (i = 0; cmd[i] != '\0'; i++) {
         if (cmd[i] == '/') {
-            entry = lookup_user_elf(cmd);
-            if (entry == 0) {
+            if (lookup_user_elf(cmd, &entry) != 0) {
                 return 0;
             }
             strncpy(resolved, cmd, cap - 1u);
@@ -858,8 +857,7 @@ static const char *resolve_command_path(const char *cmd, char *resolved, size_t 
         resolved[j++] = cmd[i];
     }
     resolved[j] = '\0';
-    entry = lookup_user_elf(resolved);
-    return entry == 0 ? 0 : resolved;
+    return lookup_user_elf(resolved, &entry) != 0 ? 0 : resolved;
 }
 
 static int tokenize(const char *line, char tokens[][128], int max_tokens) {
@@ -1205,18 +1203,18 @@ static int elf_run_command(uint8_t cmd_id, uint32_t pid, const char *args, const
 
 static int spawn_exec_elf(uint32_t shell_pid, const char *path, const char *args, const char *stdin_data, char *out,
                           size_t out_cap) {
-    const qos_user_elf_t *image = lookup_user_elf(path);
+    qos_user_elf_t image;
     uint8_t cmd_id;
     int64_t rc;
     int32_t status = -1;
     uint32_t child_pid = g_next_pid;
 
-    if (image == 0 || validate_elf_image(image->image, image->image_len) != 0) {
+    if (lookup_user_elf(path, &image) != 0 || validate_elf_image(image.image, image.image_len) != 0) {
         shell_out_append(out, out_cap, "exec: invalid ELF image\n");
         return -1;
     }
-    cmd_id = image->cmd_id;
-    if (shell_write_file_bytes(path, image->image, image->image_len) != 0) {
+    cmd_id = image.cmd_id;
+    if (shell_write_file_bytes(path, image.image, image.image_len) != 0) {
         shell_out_append(out, out_cap, "exec: failed to stage image\n");
         return -1;
     }
