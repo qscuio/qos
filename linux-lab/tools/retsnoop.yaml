@@ -1,7 +1,10 @@
 key: "retsnoop"
 repo_url: "https://github.com/anakryiko/retsnoop.git"
 checkout_dir: "build/linux-lab/tools/retsnoop"
+build_policy: "guest-build"
 prepare_commands:
   - ["git", "submodule", "update", "--init"]
-build_commands:
+build_commands: []
+guest_build_commands:
   - ["make"]
+post_prepare_asset_copies: []

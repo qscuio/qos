@@ -1,6 +1,7 @@
 key: "crash"
 repo_url: "https://github.com/crash-utility/crash.git"
 checkout_dir: "build/linux-lab/tools/crash"
+build_policy: "host-build"
 prepare_commands:
   - ["make", "configure"]
   - ["make", "gdb_files"]
@@ -8,3 +9,7 @@ prepare_commands:
 build_commands:
   - ["make"]
   - ["make", "extensions"]
+guest_build_commands: []
+post_prepare_asset_copies:
+  - from: "linux-lab/tools/assets/crash/extensions/"
+    to: "extensions/"

@@ -6,6 +6,7 @@ from typing import Any
 import yaml
 
 
+VALID_BUILD_POLICIES = {"host-build", "guest-build", "checkout-only"}
 TOOL_GROUP_MAP = {
     "debug-tools": ["crash", "cgdb"],
     "bpf-core": ["libbpf-bootstrap", "retsnoop"],
@@ -21,11 +22,57 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def _normalize_command_list(raw: Any, *, field: str, path: Path) -> list[list[str]]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(f"{path} field {field} must be a list")
+    commands: list[list[str]] = []
+    for index, command in enumerate(raw):
+        if not isinstance(command, list) or not all(isinstance(part, str) for part in command):
+            raise ValueError(f"{path} field {field}[{index}] must be a list of strings")
+        commands.append(command)
+    return commands
+
+
+def _normalize_asset_copies(raw: Any, *, path: Path) -> list[dict[str, str]]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(f"{path} field post_prepare_asset_copies must be a list")
+    copies: list[dict[str, str]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"{path} field post_prepare_asset_copies[{index}] must be a mapping")
+        source = item.get("from")
+        destination = item.get("to")
+        if not isinstance(source, str) or not isinstance(destination, str):
+            raise ValueError(f"{path} field post_prepare_asset_copies[{index}] must include string from/to")
+        copies.append({"from": source, "to": destination})
+    return copies
+
+
 def load_tool_manifests(root: Path) -> dict[str, dict[str, Any]]:
     manifests: dict[str, dict[str, Any]] = {}
     for path in sorted(root.glob("*.yaml")):
         manifest = _read_yaml(path)
-        manifests[manifest["key"]] = manifest
+        build_policy = manifest.get("build_policy", "host-build")
+        if build_policy not in VALID_BUILD_POLICIES:
+            raise ValueError(f"{path} has unsupported build_policy: {build_policy}")
+        normalized = dict(manifest)
+        normalized["build_policy"] = build_policy
+        normalized["prepare_commands"] = _normalize_command_list(manifest.get("prepare_commands"), field="prepare_commands", path=path)
+        normalized["build_commands"] = _normalize_command_list(manifest.get("build_commands"), field="build_commands", path=path)
+        normalized["guest_build_commands"] = _normalize_command_list(
+            manifest.get("guest_build_commands"),
+            field="guest_build_commands",
+            path=path,
+        )
+        normalized["post_prepare_asset_copies"] = _normalize_asset_copies(
+            manifest.get("post_prepare_asset_copies"),
+            path=path,
+        )
+        manifests[normalized["key"]] = normalized
     return manifests
 
 
@@ -53,15 +100,54 @@ def resolve_tool_plan(*, tool_keys: list[str], linux_lab_root: Path) -> list[dic
             build_workdir = Path(raw_build_workdir)
             if not build_workdir.is_absolute():
                 build_workdir = checkout_dir / build_workdir
+        asset_copies: list[dict[str, str]] = []
+        for copy_rule in manifest["post_prepare_asset_copies"]:
+            source = Path(copy_rule["from"])
+            if not source.is_absolute():
+                source = workspace_root / source
+            asset_copies.append({"from": str(source), "to": copy_rule["to"]})
         plan.append(
             {
                 "key": key,
                 "repo_url": manifest["repo_url"],
+                "build_policy": manifest["build_policy"],
                 "checkout_dir": str(checkout_dir),
                 "build_workdir": str(build_workdir),
                 "clone_command": ["git", "clone", manifest["repo_url"], str(checkout_dir)],
-                "prepare_commands": manifest.get("prepare_commands", []),
-                "build_commands": manifest.get("build_commands", []),
+                "prepare_commands": manifest["prepare_commands"],
+                "build_commands": manifest["build_commands"],
+                "guest_build_commands": manifest["guest_build_commands"],
+                "post_prepare_asset_copies": asset_copies,
             }
         )
     return plan
+
+
+def resolve_kernel_tool_plan(*, request, manifests) -> list[dict[str, Any]]:
+    arch = manifests.arches[request.arch]
+    workspace_root = Path(request.artifact_root).resolve() / "workspace"
+    build_root = workspace_root / "build"
+    kernel_tree = workspace_root / "kernel" / f"linux-{request.kernel_version}"
+    return [
+        {
+            "name": "tools/libapi",
+            "command": [
+                "make",
+                f"O={build_root}",
+                f"ARCH={request.arch}",
+                f"CROSS_COMPILE={arch.toolchain_prefix}",
+                "tools/libapi",
+            ],
+        },
+        {
+            "name": "kernel-tools",
+            "command": [
+                "make",
+                "-C",
+                str(kernel_tree / "tools"),
+                f"O={build_root}",
+                "subdir=tools",
+                "all",
+            ],
+        },
+    ]

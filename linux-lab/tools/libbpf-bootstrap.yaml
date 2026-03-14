@@ -1,8 +1,11 @@
 key: "libbpf-bootstrap"
 repo_url: "https://github.com/libbpf/libbpf-bootstrap.git"
 checkout_dir: "build/linux-lab/tools/libbpf-bootstrap"
+build_policy: "guest-build"
 build_workdir: "examples/c"
 prepare_commands:
   - ["git", "submodule", "update", "--init"]
-build_commands:
+build_commands: []
+guest_build_commands:
   - ["make", "minimal"]
+post_prepare_asset_copies: []

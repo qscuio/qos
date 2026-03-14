@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from types import ModuleType
 
+import pytest
 import yaml
 
 
@@ -59,6 +60,34 @@ def test_external_tool_manifests_are_ported() -> None:
         assert manifest["repo_url"].startswith("https://")
         assert manifest["checkout_dir"].startswith("build/linux-lab/tools/")
 
+    crash = _read_yaml(expected["crash"])
+    assert crash["build_policy"] == "host-build"
+    assert crash["post_prepare_asset_copies"] == [
+        {
+            "from": "linux-lab/tools/assets/crash/extensions/",
+            "to": "extensions/",
+        }
+    ]
+
+    assert _read_yaml(expected["cgdb"])["build_policy"] == "host-build"
+    assert _read_yaml(expected["libbpf-bootstrap"])["build_policy"] == "guest-build"
+    assert _read_yaml(expected["retsnoop"])["build_policy"] == "guest-build"
+
+
+def test_selected_kernel_manifests_include_kernel_tools_group() -> None:
+    kernel_paths = [
+        ROOT / "linux-lab" / "manifests" / "kernels" / "4.19.317.yaml",
+        ROOT / "linux-lab" / "manifests" / "kernels" / "6.4.3.yaml",
+        ROOT / "linux-lab" / "manifests" / "kernels" / "6.9.6.yaml",
+        ROOT / "linux-lab" / "manifests" / "kernels" / "6.9.8.yaml",
+        ROOT / "linux-lab" / "manifests" / "kernels" / "6.10.yaml",
+        ROOT / "linux-lab" / "manifests" / "kernels" / "6.18.4.yaml",
+    ]
+
+    for path in kernel_paths:
+        manifest = _read_yaml(path)
+        assert "kernel-tools" in manifest["tool_groups"], path.name
+
 
 def test_tooling_helper_resolves_clone_commands() -> None:
     module = _load_module("linux_lab_tooling", MODULE_PATH)
@@ -71,6 +100,40 @@ def test_tooling_helper_resolves_clone_commands() -> None:
     assert [item["key"] for item in plan] == ["crash", "libbpf-bootstrap"]
     assert plan[0]["clone_command"][:2] == ["git", "clone"]
     assert plan[1]["prepare_commands"][0][:3] == ["git", "submodule", "update"]
+    assert plan[0]["build_policy"] == "host-build"
+    assert plan[0]["post_prepare_asset_copies"] == [
+        {
+            "from": str(ROOT / "linux-lab" / "tools" / "assets" / "crash" / "extensions"),
+            "to": "extensions/",
+        }
+    ]
+    assert plan[1]["build_policy"] == "guest-build"
+    assert plan[1]["guest_build_commands"] == [["make", "minimal"]]
+    assert plan[1]["build_commands"] == []
+
+
+def test_tooling_helper_rejects_unknown_build_policy(tmp_path: Path) -> None:
+    module = _load_module("linux_lab_tooling_invalid_policy", MODULE_PATH)
+    tools_root = tmp_path / "labroot" / "tools"
+    tools_root.mkdir(parents=True, exist_ok=True)
+    (tools_root / "broken.yaml").write_text(
+        "\n".join(
+            [
+                'key: "broken"',
+                'repo_url: "https://example.invalid/broken.git"',
+                'checkout_dir: "build/linux-lab/tools/broken"',
+                'build_policy: "wrong"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="build_policy"):
+        module.resolve_tool_plan(
+            tool_keys=["broken"],
+            linux_lab_root=tmp_path / "labroot",
+        )
 
 
 def test_run_dry_run_emits_tool_metadata() -> None:
@@ -94,11 +157,63 @@ def test_run_dry_run_emits_tool_metadata() -> None:
     request_root = _latest_request_root()
     tool_state = json.loads((request_root / "state" / "build-tools.json").read_text(encoding="utf-8"))
     assert tool_state["status"] == "dry-run"
-    assert [item["key"] for item in tool_state["metadata"]["tools"]] == [
+    metadata = tool_state["metadata"]
+    assert [item["key"] for item in metadata["tools"]] == [
         "crash",
         "cgdb",
         "libbpf-bootstrap",
         "retsnoop",
+    ]
+    assert [item["key"] for item in metadata["external_tools"]] == [
+        "crash",
+        "cgdb",
+        "libbpf-bootstrap",
+        "retsnoop",
+    ]
+    assert metadata["tools"] == metadata["external_tools"]
+    assert metadata["post_prepare_asset_copies"] == [
+        {
+            "from": str(ROOT / "linux-lab" / "tools" / "assets" / "crash" / "extensions"),
+            "to": "extensions/",
+        }
+    ]
+
+    for item in metadata["external_tools"]:
+        for key in (
+            "key",
+            "build_policy",
+            "checkout_dir",
+            "prepare_commands",
+            "build_commands",
+            "guest_build_commands",
+            "post_prepare_asset_copies",
+        ):
+            assert key in item, (item["key"], key)
+
+    build_root = request_root / "workspace" / "build"
+    kernel_tree = request_root / "workspace" / "kernel" / "linux-6.18.4"
+    assert metadata["kernel_tools"] == [
+        {
+            "name": "tools/libapi",
+            "command": [
+                "make",
+                f"O={build_root}",
+                "ARCH=x86_64",
+                "CROSS_COMPILE=x86_64-linux-gnu-",
+                "tools/libapi",
+            ],
+        },
+        {
+            "name": "kernel-tools",
+            "command": [
+                "make",
+                "-C",
+                str(kernel_tree / "tools"),
+                f"O={build_root}",
+                "subdir=tools",
+                "all",
+            ],
+        },
     ]
 
 
@@ -125,6 +240,9 @@ def test_minimal_profile_omits_optional_tool_metadata() -> None:
     assert tool_state["status"] == "dry-run"
     assert tool_state["metadata"]["tool_groups"] == []
     assert tool_state["metadata"]["tools"] == []
+    assert tool_state["metadata"]["external_tools"] == []
+    assert tool_state["metadata"]["kernel_tools"] == []
+    assert tool_state["metadata"]["post_prepare_asset_copies"] == []
 
 
 def test_tooling_helper_supports_subdirectory_build_workdir(tmp_path: Path) -> None:

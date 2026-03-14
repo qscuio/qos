@@ -109,12 +109,15 @@ def test_run_dry_run_emits_example_metadata() -> None:
     request_root = _latest_request_root()
     example_state = json.loads((request_root / "state" / "build-examples.json").read_text(encoding="utf-8"))
     assert example_state["status"] == "dry-run"
-    assert [item["group"] for item in example_state["metadata"]["example_plans"]] == [
+    example_plans = example_state["metadata"]["example_plans"]
+    assert [item["group"] for item in example_plans] == [
         "modules-core",
         "userspace-core",
         "rust-core",
         "bpf-core",
     ]
+    rust_plan = next(item for item in example_plans if item["group"] == "rust-core")
+    assert [entry["key"] for entry in rust_plan["entries"]] == ["rust_learn"]
 
 
 def test_full_samples_profile_emits_broad_example_metadata() -> None:

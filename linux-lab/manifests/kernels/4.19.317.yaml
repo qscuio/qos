@@ -20,5 +20,6 @@ patch_set: "linux-lab/patches/linux-4.19.317/kernel.patch"
 config_family: "modern"
 tool_groups:
   - "debug-core"
+  - "kernel-tools"
 example_groups:
   - "modules-core"

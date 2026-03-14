@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from orchestrator.core.stages import StageDefinition, make_stage_result, run_stage_command
-from orchestrator.core.tooling import resolve_tool_keys, resolve_tool_plan
+from orchestrator.core.tooling import resolve_kernel_tool_plan, resolve_tool_keys, resolve_tool_plan
 
 
 LINUX_LAB_ROOT = Path(__file__).resolve().parents[2]
@@ -46,14 +46,20 @@ def _resolve_host_tools(manifests, request) -> list[str]:
 def _execute(request, manifests, request_root: Path) -> dict:
     tool_groups = _resolve_tool_groups(manifests, request)
     tool_keys = resolve_tool_keys(tool_groups)
-    tools = resolve_tool_plan(tool_keys=tool_keys, linux_lab_root=_linux_lab_root())
+    external_tools = resolve_tool_plan(tool_keys=tool_keys, linux_lab_root=_linux_lab_root())
+    kernel_tools = resolve_kernel_tool_plan(request=request, manifests=manifests) if "kernel-tools" in tool_groups else []
+    post_prepare_asset_copies: list[dict[str, str]] = []
+    for tool in external_tools:
+        for copy_rule in tool["post_prepare_asset_copies"]:
+            if copy_rule not in post_prepare_asset_copies:
+                post_prepare_asset_copies.append(copy_rule)
     status = "placeholder"
     if request.command == "run" and request.dry_run:
         status = "dry-run"
     log_path = request_root / "logs" / "build-tools.log"
     log_path.write_text("build-tools: runtime metadata emitted\n", encoding="utf-8")
     if request.command == "run" and not request.dry_run:
-        for tool in tools:
+        for tool in external_tools:
             checkout_dir = Path(tool["checkout_dir"])
             build_workdir = Path(tool.get("build_workdir", tool["checkout_dir"]))
             if not checkout_dir.exists():
@@ -74,7 +80,10 @@ def _execute(request, manifests, request_root: Path) -> dict:
         metadata={
             "tool_groups": tool_groups,
             "host_tools": _resolve_host_tools(manifests, request),
-            "tools": tools,
+            "tools": external_tools,
+            "external_tools": external_tools,
+            "kernel_tools": kernel_tools,
+            "post_prepare_asset_copies": post_prepare_asset_copies,
         },
     )
 

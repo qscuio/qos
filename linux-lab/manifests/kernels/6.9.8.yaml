@@ -21,6 +21,7 @@ config_family: "modern"
 tool_groups:
   - "debug-core"
   - "bpf-core"
+  - "kernel-tools"
 example_groups:
   - "modules-core"
   - "bpf-core"
