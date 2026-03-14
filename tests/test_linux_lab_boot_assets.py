@@ -195,6 +195,50 @@ def test_boot_stage_executes_helper_script_in_print_mode(tmp_path: Path, monkeyp
     assert "down.sh" in log_text
 
 
+def test_boot_stage_uses_manifest_qemu_cpu_for_arm64(tmp_path: Path, monkeypatch) -> None:
+    boot_mod = _load_module("linux_lab_boot_arm64_live", BOOT_STAGE)
+    state_mod = _load_module("linux_lab_state_boot_arm64_live", STATE_MODULE)
+
+    request = _make_request(tmp_path)
+    request.arch = "arm64"
+    request.image_release = "jammy"
+    request_root = Path(request.artifact_root)
+    state_mod.ensure_request_dirs(request_root)
+    monkeypatch.setenv("LINUX_LAB_BOOT_MODE", "print")
+
+    kernel_image = (
+        Path(request.artifact_root)
+        / "workspace"
+        / "build"
+        / "arch"
+        / request.arch
+        / "boot"
+        / "Image.gz"
+    )
+    kernel_image.parent.mkdir(parents=True, exist_ok=True)
+    kernel_image.write_text("kernel\n", encoding="utf-8")
+    image_path = Path(request.artifact_root) / "images" / f"{request.image_release}.img"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_text("image\n", encoding="utf-8")
+
+    manifests = SimpleNamespace(
+        arches={
+            "arm64": SimpleNamespace(
+                kernel_image_name="Image.gz",
+                qemu_cpu="cortex-a72",
+            )
+        }
+    )
+    result = boot_mod.STAGE.executor(request, manifests, request_root)
+
+    log_text = (request_root / "logs" / "boot.log").read_text(encoding="utf-8")
+
+    assert result["status"] == "succeeded"
+    assert "qemu-system-aarch64" in log_text
+    assert "cortex-a72" in result["metadata"]["qemu_command"]
+    assert "cortex-a72" in log_text
+
+
 def test_boot_helper_fails_when_wrapped_command_exits_immediately(tmp_path: Path) -> None:
     log_path = tmp_path / "boot.log"
     pidfile = tmp_path / "qemu.pid"

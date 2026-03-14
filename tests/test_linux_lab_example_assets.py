@@ -94,3 +94,28 @@ def test_run_dry_run_emits_example_metadata() -> None:
         "rust-core",
         "bpf-core",
     ]
+
+
+def test_minimal_profile_omits_optional_example_metadata() -> None:
+    result = _run(
+        [
+            str(BIN_LINUX_LAB),
+            "run",
+            "--kernel",
+            "6.18.4",
+            "--arch",
+            "arm64",
+            "--image",
+            "noble",
+            "--profile",
+            "minimal",
+            "--dry-run",
+        ]
+    )
+    assert result.returncode == 0, result.stderr
+
+    request_root = _latest_request_root()
+    example_state = json.loads((request_root / "state" / "build-examples.json").read_text(encoding="utf-8"))
+    assert example_state["status"] == "dry-run"
+    assert example_state["metadata"]["example_groups"] == []
+    assert example_state["metadata"]["example_plans"] == []

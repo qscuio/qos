@@ -56,6 +56,7 @@ def test_image_asset_helper_resolves_region_specific_mirror() -> None:
 
 def test_qemu_helper_builds_boot_commands_for_both_arches() -> None:
     module = _load_module("linux_lab_qemu", QEMU_MODULE)
+    arm_manifest = _read_yaml(ROOT / "linux-lab" / "manifests" / "arches" / "arm64.yaml")
 
     x86 = module.build_qemu_command(
         arch="x86_64",
@@ -68,12 +69,14 @@ def test_qemu_helper_builds_boot_commands_for_both_arches() -> None:
         kernel_image=Path("build/linux-lab/kernel/arch/arm64/boot/Image.gz"),
         disk_image=Path("build/linux-lab/images/jammy.img"),
         shared_dir=Path("."),
+        qemu_cpu=arm_manifest["qemu_cpu"],
     )
 
     assert x86[0] == "qemu-system-x86_64"
     assert "root=/dev/sda" in " ".join(x86)
     assert "console=ttyS0" in " ".join(x86)
     assert arm[0] == "qemu-system-aarch64"
+    assert "cortex-a72" in arm
     assert "root=/dev/vda" in " ".join(arm)
     assert "console=ttyAMA0" in " ".join(arm)
 

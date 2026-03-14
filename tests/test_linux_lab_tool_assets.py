@@ -101,3 +101,59 @@ def test_run_dry_run_emits_tool_metadata() -> None:
         "retsnoop",
     ]
 
+
+def test_minimal_profile_omits_optional_tool_metadata() -> None:
+    result = _run(
+        [
+            str(BIN_LINUX_LAB),
+            "run",
+            "--kernel",
+            "6.18.4",
+            "--arch",
+            "arm64",
+            "--image",
+            "noble",
+            "--profile",
+            "minimal",
+            "--dry-run",
+        ]
+    )
+    assert result.returncode == 0, result.stderr
+
+    request_root = _latest_request_root()
+    tool_state = json.loads((request_root / "state" / "build-tools.json").read_text(encoding="utf-8"))
+    assert tool_state["status"] == "dry-run"
+    assert tool_state["metadata"]["tool_groups"] == []
+    assert tool_state["metadata"]["tools"] == []
+
+
+def test_tooling_helper_supports_subdirectory_build_workdir(tmp_path: Path) -> None:
+    module = _load_module("linux_lab_tooling_subdir", MODULE_PATH)
+
+    tools_root = tmp_path / "labroot" / "tools"
+    tools_root.mkdir(parents=True, exist_ok=True)
+    (tools_root / "libbpf-bootstrap.yaml").write_text(
+        "\n".join(
+            [
+                'key: "libbpf-bootstrap"',
+                'repo_url: "https://example.invalid/libbpf-bootstrap.git"',
+                'checkout_dir: "build/linux-lab/tools/libbpf-bootstrap"',
+                'build_workdir: "examples/c"',
+                "prepare_commands:",
+                '  - ["git", "submodule", "update", "--init"]',
+                "build_commands:",
+                '  - ["make", "minimal"]',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    plan = module.resolve_tool_plan(
+        tool_keys=["libbpf-bootstrap"],
+        linux_lab_root=tmp_path / "labroot",
+    )
+
+    assert len(plan) == 1
+    assert plan[0]["build_workdir"].endswith("build/linux-lab/tools/libbpf-bootstrap/examples/c")
+    assert plan[0]["build_commands"] == [["make", "minimal"]]

@@ -47,11 +47,18 @@ def resolve_tool_plan(*, tool_keys: list[str], linux_lab_root: Path) -> list[dic
         checkout_dir = Path(manifest["checkout_dir"])
         if not checkout_dir.is_absolute():
             checkout_dir = workspace_root / checkout_dir
+        build_workdir = checkout_dir
+        raw_build_workdir = manifest.get("build_workdir")
+        if raw_build_workdir:
+            build_workdir = Path(raw_build_workdir)
+            if not build_workdir.is_absolute():
+                build_workdir = checkout_dir / build_workdir
         plan.append(
             {
                 "key": key,
                 "repo_url": manifest["repo_url"],
                 "checkout_dir": str(checkout_dir),
+                "build_workdir": str(build_workdir),
                 "clone_command": ["git", "clone", manifest["repo_url"], str(checkout_dir)],
                 "prepare_commands": manifest.get("prepare_commands", []),
                 "build_commands": manifest.get("build_commands", []),

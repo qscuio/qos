@@ -18,6 +18,8 @@ def _linux_lab_root() -> Path:
 
 
 def _resolve_tool_groups(manifests, request) -> list[str]:
+    if "minimal" in request.profiles:
+        return []
     kernel = manifests.kernels[request.kernel_version]
     groups: list[str] = []
     for group in kernel.tool_groups:
@@ -31,6 +33,8 @@ def _resolve_tool_groups(manifests, request) -> list[str]:
 
 
 def _resolve_host_tools(manifests, request) -> list[str]:
+    if "minimal" in request.profiles:
+        return []
     host_tools: list[str] = []
     for profile_key in request.profiles:
         for tool in manifests.profiles[profile_key].host_tools:
@@ -51,13 +55,14 @@ def _execute(request, manifests, request_root: Path) -> dict:
     if request.command == "run" and not request.dry_run:
         for tool in tools:
             checkout_dir = Path(tool["checkout_dir"])
+            build_workdir = Path(tool.get("build_workdir", tool["checkout_dir"]))
             if not checkout_dir.exists():
                 checkout_dir.parent.mkdir(parents=True, exist_ok=True)
                 run_stage_command(tool["clone_command"], cwd=checkout_dir.parent, log_path=log_path)
             for command in tool["prepare_commands"]:
                 run_stage_command(command, cwd=checkout_dir, log_path=log_path)
             for command in tool["build_commands"]:
-                run_stage_command(command, cwd=checkout_dir, log_path=log_path)
+                run_stage_command(command, cwd=build_workdir, log_path=log_path)
         status = "succeeded"
     return make_stage_result(
         stage="build-tools",

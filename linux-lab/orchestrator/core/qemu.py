@@ -13,6 +13,7 @@ def build_qemu_command(
     network_down_script: Path | None = None,
     pidfile: Path | None = None,
     enable_kvm: bool | None = None,
+    qemu_cpu: str | None = None,
 ) -> list[str]:
     tap_up = str(network_up_script) if network_up_script is not None else "no"
     tap_down = str(network_down_script) if network_down_script is not None else "no"
@@ -67,7 +68,7 @@ def build_qemu_command(
             "-accel",
             "tcg,thread=multi",
             "-cpu",
-            "max",
+            qemu_cpu or "max",
             "-smp",
             "4",
             "-m",

@@ -58,6 +58,26 @@ def _write_tool_manifest(root: Path, key: str, repo_url: str) -> None:
     )
 
 
+def _write_tool_manifest_with_build_workdir(root: Path, key: str, repo_url: str, build_workdir: str) -> None:
+    (root / "tools").mkdir(parents=True, exist_ok=True)
+    (root / "tools" / f"{key}.yaml").write_text(
+        "\n".join(
+            [
+                f'key: "{key}"',
+                f'repo_url: "{repo_url}"',
+                f'checkout_dir: "build/linux-lab/tools/{key}"',
+                f'build_workdir: "{build_workdir}"',
+                "prepare_commands:",
+                '  - ["sh", "-c", "mkdir -p examples/c && printf prepared > prepared.txt"]',
+                "build_commands:",
+                '  - ["sh", "-c", "printf built > built.txt"]',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def _make_request(tmp_path: Path) -> object:
     return SimpleNamespace(
         kernel_version="fixture",
@@ -110,6 +130,42 @@ def test_build_tools_stage_executes_local_tool_plan(tmp_path: Path, monkeypatch)
         checkout = tmp_path / "build" / "linux-lab" / "tools" / key
         assert (checkout / "prepared.txt").read_text(encoding="utf-8") == "prepared"
         assert (checkout / "built.txt").read_text(encoding="utf-8") == "built"
+
+
+def test_build_tools_stage_executes_tool_builds_in_manifest_subdirectory(tmp_path: Path, monkeypatch) -> None:
+    build_tools_mod = _load_module("linux_lab_build_tools_subdir_live", BUILD_TOOLS_STAGE)
+    state_mod = _load_module("linux_lab_state_tools_subdir_live", STATE_MODULE)
+
+    labroot = tmp_path / "labroot"
+    repo = tmp_path / "repos" / "libbpf-bootstrap"
+    retsnoop_repo = tmp_path / "repos" / "retsnoop"
+    _git_init(repo)
+    _git_init(retsnoop_repo)
+    _write_tool_manifest_with_build_workdir(labroot, "libbpf-bootstrap", str(repo), "examples/c")
+    _write_tool_manifest(labroot, "retsnoop", str(retsnoop_repo))
+    monkeypatch.setenv("LINUX_LAB_ROOT_OVERRIDE", str(labroot))
+
+    request = _make_request(tmp_path)
+    request.profiles = ["bpf"]
+    manifests = SimpleNamespace(
+        kernels={"fixture": SimpleNamespace(tool_groups=[], example_groups=[])},
+        profiles={
+            "bpf": SimpleNamespace(
+                tool_groups=["bpf-core"],
+                host_tools=[],
+                example_groups=[],
+            )
+        },
+    )
+    request_root = Path(request.artifact_root)
+    state_mod.ensure_request_dirs(request_root)
+
+    result = build_tools_mod.STAGE.executor(request, manifests, request_root)
+
+    checkout = tmp_path / "build" / "linux-lab" / "tools" / "libbpf-bootstrap"
+    assert result["status"] == "succeeded"
+    assert (checkout / "prepared.txt").read_text(encoding="utf-8") == "prepared"
+    assert (checkout / "examples" / "c" / "built.txt").read_text(encoding="utf-8") == "built"
 
 
 def test_build_examples_stage_executes_local_example_plan(tmp_path: Path, monkeypatch) -> None:

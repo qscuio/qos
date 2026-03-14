@@ -43,6 +43,7 @@ def _execute(request, manifests, request_root: Path) -> dict:
         network_up_script=up_script,
         network_down_script=down_script,
         pidfile=pidfile,
+        qemu_cpu=getattr(arch, "qemu_cpu", None),
     )
     status = "placeholder"
     if request.command == "run" and request.dry_run:
