@@ -30,11 +30,12 @@ def make_stage_result(
     inputs: tuple[str, ...],
     outputs: tuple[str, ...],
     log_path: Path,
+    metadata: dict | None = None,
     error_kind: str | None = None,
     error_message: str | None = None,
 ) -> dict:
     timestamp = iso_now()
-    return {
+    result = {
         "stage": stage,
         "status": status,
         "started_at": timestamp,
@@ -46,6 +47,9 @@ def make_stage_result(
         "error_kind": error_kind,
         "error_message": error_message,
     }
+    if metadata is not None:
+        result["metadata"] = metadata
+    return result
 
 
 def placeholder_executor(stage_name: str) -> StageExecutor:

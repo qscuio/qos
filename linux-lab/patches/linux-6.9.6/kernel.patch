@@ -1,0 +1,52 @@
+diff -urNa kernel/linux-6.9.6/kernel/exit.c kernel/linux-6.9.6/kernel/exit.c
+--- kernel/linux-6.9.6/kernel/exit.c	2024-06-21 21:40:40.000000000 +0900
++++ kernel/linux-6.9.6/kernel/exit.c	2024-07-01 17:40:02.142887240 +0900
+@@ -928,6 +928,7 @@
+ 	lockdep_free_task(tsk);
+ 	do_task_dead();
+ }
++EXPORT_SYMBOL_GPL(do_exit);
+ 
+ void __noreturn make_task_dead(int signr)
+ {
+@@ -1027,6 +1028,7 @@
+ 	do_exit(exit_code);
+ 	/* NOTREACHED */
+ }
++EXPORT_SYMBOL_GPL(do_group_exit);
+ 
+ /*
+  * this kills every thread in the thread group. Note that any externally
+diff -urNa kernel/linux-6.9.6/kernel/kallsyms.c kernel/linux-6.9.6/kernel/kallsyms.c
+--- kernel/linux-6.9.6/kernel/kallsyms.c	2024-06-21 21:40:40.000000000 +0900
++++ kernel/linux-6.9.6/kernel/kallsyms.c	2024-06-30 15:20:21.593257018 +0900
+@@ -277,6 +277,7 @@
+ 
+ 	return module_kallsyms_lookup_name(name);
+ }
++EXPORT_SYMBOL(kallsyms_lookup_name);
+ 
+ /*
+  * Iterate over all symbols in vmlinux.  For symbols from modules use
+diff -urNa kernel/linux-6.9.6/mm/pgtable-generic.c kernel/linux-6.9.6/mm/pgtable-generic.c
+--- kernel/linux-6.9.6/mm/pgtable-generic.c	2024-06-21 21:40:40.000000000 +0900
++++ kernel/linux-6.9.6/mm/pgtable-generic.c	2024-06-30 15:20:21.593257018 +0900
+@@ -304,6 +304,7 @@
+ 	rcu_read_unlock();
+ 	return NULL;
+ }
++EXPORT_SYMBOL(__pte_offset_map);
+ 
+ pte_t *pte_offset_map_nolock(struct mm_struct *mm, pmd_t *pmd,
+ 			     unsigned long addr, spinlock_t **ptlp)
+diff -urNa kernel/linux-6.9.6/mm/util.c kernel/linux-6.9.6/mm/util.c
+--- kernel/linux-6.9.6/mm/util.c	2024-06-21 21:40:40.000000000 +0900
++++ kernel/linux-6.9.6/mm/util.c	2024-06-30 15:20:21.593257018 +0900
+@@ -1060,6 +1060,7 @@
+ out:
+ 	return res;
+ }
++EXPORT_SYMBOL(get_cmdline);
+ 
+ int __weak memcmp_pages(struct page *page1, struct page *page2)
+ {

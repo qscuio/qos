@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,10 @@ def _load_module(name: str, path: Path) -> ModuleType:
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def setup_function() -> None:
+    shutil.rmtree(ROOT / "build" / "linux-lab", ignore_errors=True)
 
 
 def test_manifest_defaults_and_schema_contract() -> None:

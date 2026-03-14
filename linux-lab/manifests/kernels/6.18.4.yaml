@@ -12,7 +12,7 @@ supported_profiles:
 required_profiles: []
 default_compat: true
 source_url: "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.4.tar.xz"
-source_sha256: "phase1-placeholder"
+source_sha256: "f850139ca5f79c1bf6bb8b32f92e212aadca97bdaef8a83a7cf4ac4d6a525fab"
 patch_set: null
 config_family: "modern"
 tool_groups:

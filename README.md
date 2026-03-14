@@ -80,15 +80,17 @@ Linux1 test target:
 make test-linux1
 ```
 
-## Linux Lab Phase 1
+## Linux Lab Phase 2
 
 `linux-lab/` is the bootstrap for the modern manifest-driven kernel lab port from `../qulk`.
 
-Phase 1 is planning-only. It provides:
+The current bootstrap provides:
 
 - native request validation: `make linux-lab-validate`
 - placeholder stage planning: `make linux-lab-plan`
 - compatibility shim entrypoint: `linux-lab/bin/ulk arch=x86_64 kernel=6.9.8 mirror=sg`
+- ported kernel patch/config assets under `linux-lab/patches/`, `linux-lab/configs/`, and `linux-lab/fragments/`
+- helper-aware planning metadata for source fetch, kernel patching, and config composition
 
 Native CLI examples:
 

@@ -12,7 +12,7 @@ supported_profiles:
 required_profiles: []
 default_compat: false
 source_url: "https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.19.317.tar.xz"
-source_sha256: "phase1-placeholder"
+source_sha256: "062b70cc132378e1c685df44ddf7e05bab4752b690ada17b080655a63f993581"
 patch_set: "linux-lab/patches/linux-4.19.317/kernel.patch"
 config_family: "modern"
 tool_groups:

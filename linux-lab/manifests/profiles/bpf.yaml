@@ -3,7 +3,7 @@ kind: "concrete"
 precedence: 20
 replaces: []
 expands_to: []
-fragment_ref: "linux-lab/fragments/bpf.yaml"
+fragment_ref: "linux-lab/fragments/bpf.conf"
 compatible_kernels:
   - "*"
 compatible_arches:

@@ -1,0 +1,435 @@
+diff -urNa kernel/linux-6.10/fs/read_write.c kernel/linux-6.10/fs/read_write.c
+--- kernel/linux-6.10/fs/read_write.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/fs/read_write.c	2024-07-22 15:03:47.734022104 +0900
+@@ -483,6 +483,7 @@
+ 	inc_syscr(current);
+ 	return ret;
+ }
++EXPORT_SYMBOL(vfs_read);
+ 
+ static ssize_t new_sync_write(struct file *filp, const char __user *buf, size_t len, loff_t *ppos)
+ {
+@@ -598,6 +599,7 @@
+ 	file_end_write(file);
+ 	return ret;
+ }
++EXPORT_SYMBOL(vfs_write);
+ 
+ /* file_ppos returns &file->f_pos or NULL if file is stream */
+ static inline loff_t *file_ppos(struct file *file)
+diff -urNa kernel/linux-6.10/fs/stat.c kernel/linux-6.10/fs/stat.c
+--- kernel/linux-6.10/fs/stat.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/fs/stat.c	2024-07-22 15:07:05.662257260 +0900
+@@ -199,6 +199,7 @@
+ 	fdput(f);
+ 	return error;
+ }
++EXPORT_SYMBOL(vfs_fstat);
+ 
+ int getname_statx_lookup_flags(int flags)
+ {
+@@ -306,6 +307,7 @@
+ 
+ 	return ret;
+ }
++EXPORT_SYMBOL(vfs_fstatat);
+ 
+ #ifdef __ARCH_WANT_OLD_STAT
+ 
+diff -urNa kernel/linux-6.10/include/linux/interrupt.h kernel/linux-6.10/include/linux/interrupt.h
+--- kernel/linux-6.10/include/linux/interrupt.h	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/include/linux/interrupt.h	2024-07-22 15:08:07.509149968 +0900
+@@ -557,9 +557,11 @@
+ 	BLOCK_SOFTIRQ,
+ 	IRQ_POLL_SOFTIRQ,
+ 	TASKLET_SOFTIRQ,
++	ULK_HI_SOFTIRQ,
+ 	SCHED_SOFTIRQ,
+ 	HRTIMER_SOFTIRQ,
+ 	RCU_SOFTIRQ,    /* Preferable RCU should always be the last softirq */
++	ULK_SOFTIRQ,
+ 
+ 	NR_SOFTIRQS
+ };
+diff -urNa kernel/linux-6.10/include/linux/socket.h kernel/linux-6.10/include/linux/socket.h
+--- kernel/linux-6.10/include/linux/socket.h	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/include/linux/socket.h	2024-07-22 15:08:52.556360356 +0900
+@@ -241,7 +241,8 @@
+ 				 * transport protocol
+ 				 */
+ 
+-#define AF_MAX		46	/* For now.. */
++#define AF_ULK      46
++#define AF_MAX		47	/* For now.. */
+ 
+ /* Protocol families, same as address families. */
+ #define PF_UNSPEC	AF_UNSPEC
+@@ -292,6 +293,7 @@
+ #define PF_SMC		AF_SMC
+ #define PF_XDP		AF_XDP
+ #define PF_MCTP		AF_MCTP
++#define PF_ULK		AF_ULK
+ #define PF_MAX		AF_MAX
+ 
+ /* Maximum queue length specifiable by listen.  */
+diff -urNa kernel/linux-6.10/kernel/exit.c kernel/linux-6.10/kernel/exit.c
+--- kernel/linux-6.10/kernel/exit.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/kernel/exit.c	2024-07-22 15:09:24.411809824 +0900
+@@ -926,6 +926,7 @@
+ 	lockdep_free_task(tsk);
+ 	do_task_dead();
+ }
++EXPORT_SYMBOL(do_exit);
+ 
+ void __noreturn make_task_dead(int signr)
+ {
+@@ -1025,6 +1026,7 @@
+ 	do_exit(exit_code);
+ 	/* NOTREACHED */
+ }
++EXPORT_SYMBOL(do_group_exit);
+ 
+ /*
+  * this kills every thread in the thread group. Note that any externally
+diff -urNa kernel/linux-6.10/kernel/kallsyms.c kernel/linux-6.10/kernel/kallsyms.c
+--- kernel/linux-6.10/kernel/kallsyms.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/kernel/kallsyms.c	2024-07-22 15:10:18.558887747 +0900
+@@ -277,6 +277,7 @@
+ 
+ 	return module_kallsyms_lookup_name(name);
+ }
++EXPORT_SYMBOL(kallsyms_lookup_name);
+ 
+ /*
+  * Iterate over all symbols in vmlinux.  For symbols from modules use
+@@ -299,6 +300,7 @@
+ 	}
+ 	return 0;
+ }
++EXPORT_SYMBOL(kallsyms_on_each_symbol);
+ 
+ int kallsyms_on_each_match_symbol(int (*fn)(void *, unsigned long),
+ 				  const char *name, void *data)
+@@ -317,6 +319,7 @@
+ 
+ 	return ret;
+ }
++EXPORT_SYMBOL(kallsyms_on_each_match_symbol);
+ 
+ static unsigned long get_symbol_pos(unsigned long addr,
+ 				    unsigned long *symbolsize,
+diff -urNa kernel/linux-6.10/kernel/softirq.c kernel/linux-6.10/kernel/softirq.c
+--- kernel/linux-6.10/kernel/softirq.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/kernel/softirq.c	2024-07-22 15:11:55.409276713 +0900
+@@ -63,7 +63,7 @@
+ 
+ const char * const softirq_to_name[NR_SOFTIRQS] = {
+ 	"HI", "TIMER", "NET_TX", "NET_RX", "BLOCK", "IRQ_POLL",
+-	"TASKLET", "SCHED", "HRTIMER", "RCU"
++	"TASKLET", "QULK", "SCHED", "HRTIMER", "RCU", "QULK_HI"
+ };
+ 
+ /*
+@@ -692,6 +692,7 @@
+ 	raise_softirq_irqoff(nr);
+ 	local_irq_restore(flags);
+ }
++EXPORT_SYMBOL(raise_softirq);
+ 
+ void __raise_softirq_irqoff(unsigned int nr)
+ {
+@@ -699,11 +700,13 @@
+ 	trace_softirq_raise(nr);
+ 	or_softirq_pending(1UL << nr);
+ }
++EXPORT_SYMBOL(__raise_softirq_irqoff);
+ 
+ void open_softirq(int nr, void (*action)(struct softirq_action *))
+ {
+ 	softirq_vec[nr].action = action;
+ }
++EXPORT_SYMBOL(open_softirq);
+ 
+ /*
+  * Tasklets
+diff -urNa kernel/linux-6.10/kernel/workqueue.c kernel/linux-6.10/kernel/workqueue.c
+--- kernel/linux-6.10/kernel/workqueue.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/kernel/workqueue.c	2024-07-22 15:12:49.548394846 +0900
+@@ -4560,6 +4560,7 @@
+ 	free_percpu(works);
+ 	return 0;
+ }
++EXPORT_SYMBOL(schedule_on_each_cpu);
+ 
+ /**
+  * execute_in_process_context - reliably execute the routine with user context
+@@ -6303,6 +6304,7 @@
+ 	}
+ 
+ }
++EXPORT_SYMBOL(show_one_workqueue);
+ 
+ /**
+  * show_one_worker_pool - dump state of specified worker pool
+@@ -6376,6 +6378,7 @@
+ 
+ 	rcu_read_unlock();
+ }
++EXPORT_SYMBOL(show_all_workqueues);
+ 
+ /**
+  * show_freezable_workqueues - dump freezable workqueue state
+diff -urNa kernel/linux-6.10/mm/init-mm.c kernel/linux-6.10/mm/init-mm.c
+--- kernel/linux-6.10/mm/init-mm.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/mm/init-mm.c	2024-07-22 15:13:11.508584799 +0900
+@@ -46,6 +46,7 @@
+ 	.cpu_bitmap	= CPU_BITS_NONE,
+ 	INIT_MM_CONTEXT(init_mm)
+ };
++EXPORT_SYMBOL(init_mm);
+ 
+ void setup_initial_init_mm(void *start_code, void *end_code,
+ 			   void *end_data, void *brk)
+diff -urNa kernel/linux-6.10/mm/pgtable-generic.c kernel/linux-6.10/mm/pgtable-generic.c
+--- kernel/linux-6.10/mm/pgtable-generic.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/mm/pgtable-generic.c	2024-07-22 15:13:51.126674175 +0900
+@@ -304,6 +304,7 @@
+ 	rcu_read_unlock();
+ 	return NULL;
+ }
++EXPORT_SYMBOL(__pte_offset_map);
+ 
+ pte_t *pte_offset_map_nolock(struct mm_struct *mm, pmd_t *pmd,
+ 			     unsigned long addr, spinlock_t **ptlp)
+diff -urNa kernel/linux-6.10/mm/show_mem.c kernel/linux-6.10/mm/show_mem.c
+--- kernel/linux-6.10/mm/show_mem.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/mm/show_mem.c	2024-07-22 15:14:14.975851593 +0900
+@@ -450,3 +450,4 @@
+ 	}
+ #endif
+ }
++EXPORT_SYMBOL(__show_mem);
+diff -urNa kernel/linux-6.10/mm/swap_state.c kernel/linux-6.10/mm/swap_state.c
+--- kernel/linux-6.10/mm/swap_state.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/mm/swap_state.c	2024-07-22 15:15:02.678038081 +0900
+@@ -68,6 +68,7 @@
+ 	printk("Free swap  = %ldkB\n", K(get_nr_swap_pages()));
+ 	printk("Total swap = %lukB\n", K(total_swap_pages));
+ }
++EXPORT_SYMBOL(show_swap_cache_info);
+ 
+ void *get_shadow_from_swap_cache(swp_entry_t entry)
+ {
+@@ -80,6 +81,7 @@
+ 		return shadow;
+ 	return NULL;
+ }
++EXPORT_SYMBOL(get_shadow_from_swap_cache);
+ 
+ /*
+  * add_to_swap_cache resembles filemap_add_folio on swapper_space,
+diff -urNa kernel/linux-6.10/mm/util.c kernel/linux-6.10/mm/util.c
+--- kernel/linux-6.10/mm/util.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/mm/util.c	2024-07-22 15:15:39.975601846 +0900
+@@ -1060,6 +1060,7 @@
+ out:
+ 	return res;
+ }
++EXPORT_SYMBOL(get_cmdline);
+ 
+ int __weak memcmp_pages(struct page *page1, struct page *page2)
+ {
+@@ -1073,6 +1074,7 @@
+ 	kunmap_local(addr1);
+ 	return ret;
+ }
++EXPORT_SYMBOL(memcmp_pages);
+ 
+ #ifdef CONFIG_PRINTK
+ /**
+diff -urNa kernel/linux-6.10/net/core/sock.c kernel/linux-6.10/net/core/sock.c
+--- kernel/linux-6.10/net/core/sock.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/net/core/sock.c	2024-07-22 15:16:25.561353465 +0900
+@@ -235,7 +235,7 @@
+   x "AF_IEEE802154",	x "AF_CAIF"	,	x "AF_ALG"      , \
+   x "AF_NFC"   ,	x "AF_VSOCK"    ,	x "AF_KCM"      , \
+   x "AF_QIPCRTR",	x "AF_SMC"	,	x "AF_XDP"	, \
+-  x "AF_MCTP"  , \
++  x "AF_MCTP"  ,    x "AF_ULK"  , \
+   x "AF_MAX"
+ 
+ static const char *const af_family_key_strings[AF_MAX+1] = {
+diff -urNa kernel/linux-6.10/net/socket.c kernel/linux-6.10/net/socket.c
+--- kernel/linux-6.10/net/socket.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/net/socket.c	2024-07-22 15:16:59.242543136 +0900
+@@ -218,6 +218,7 @@
+ 	[PF_SMC]	= "PF_SMC",
+ 	[PF_XDP]	= "PF_XDP",
+ 	[PF_MCTP]	= "PF_MCTP",
++	[PF_ULK]	= "PF_ULK",
+ };
+ 
+ /*
+diff -urNa kernel/linux-6.10/security/selinux/hooks.c kernel/linux-6.10/security/selinux/hooks.c
+--- kernel/linux-6.10/security/selinux/hooks.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/security/selinux/hooks.c	2024-07-22 15:17:37.639799021 +0900
+@@ -1297,7 +1297,9 @@
+ 			return SECCLASS_XDP_SOCKET;
+ 		case PF_MCTP:
+ 			return SECCLASS_MCTP_SOCKET;
+-#if PF_MAX > 46
++		case PF_ULK:
++			return SECCLASS_ULK_SOCKET;
++#if PF_MAX > 47
+ #error New address family defined, please update this function.
+ #endif
+ 		}
+diff -urNa kernel/linux-6.10/security/selinux/include/classmap.h kernel/linux-6.10/security/selinux/include/classmap.h
+--- kernel/linux-6.10/security/selinux/include/classmap.h	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/security/selinux/include/classmap.h	2024-07-22 15:18:08.996750495 +0900
+@@ -173,6 +173,7 @@
+ 	    NULL } },
+ 	{ "xdp_socket", { COMMON_SOCK_PERMS, NULL } },
+ 	{ "mctp_socket", { COMMON_SOCK_PERMS, NULL } },
++	{ "ulk_socket", { COMMON_SOCK_PERMS, NULL } },
+ 	{ "perf_event",
+ 	  { "open", "cpu", "kernel", "tracepoint", "read", "write", NULL } },
+ 	{ "anon_inode", { COMMON_FILE_PERMS, NULL } },
+@@ -181,6 +182,6 @@
+ 	{ NULL }
+ };
+ 
+-#if PF_MAX > 46
++#if PF_MAX > 47
+ #error New address family defined, please update secclass_map.
+ #endif
+diff -urNa kernel/linux-6.10/tools/objtool/check.c kernel/linux-6.10/tools/objtool/check.c
+--- kernel/linux-6.10/tools/objtool/check.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/tools/objtool/check.c	2024-07-22 15:21:55.753986168 +0900
+@@ -193,11 +193,11 @@
+ 	struct instruction *insn;
+ 	bool empty = true;
+ 
+-#define NORETURN(func) __stringify(func),
++#define __NORETURN(func) __stringify(func),
+ 	static const char * const global_noreturns[] = {
+ #include "noreturns.h"
+ 	};
+-#undef NORETURN
++#undef __NORETURN
+ 
+ 	if (!func)
+ 		return false;
+diff -urNa kernel/linux-6.10/tools/objtool/noreturns.h kernel/linux-6.10/tools/objtool/noreturns.h
+--- kernel/linux-6.10/tools/objtool/noreturns.h	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/tools/objtool/noreturns.h	2024-07-22 15:18:41.221663302 +0900
+@@ -6,41 +6,41 @@
+  *
+  * Yes, this is unfortunate.  A better solution is in the works.
+  */
+-NORETURN(__fortify_panic)
+-NORETURN(__kunit_abort)
+-NORETURN(__module_put_and_kthread_exit)
+-NORETURN(__reiserfs_panic)
+-NORETURN(__stack_chk_fail)
+-NORETURN(__tdx_hypercall_failed)
+-NORETURN(__ubsan_handle_builtin_unreachable)
+-NORETURN(arch_cpu_idle_dead)
+-NORETURN(bch2_trans_in_restart_error)
+-NORETURN(bch2_trans_restart_error)
+-NORETURN(cpu_bringup_and_idle)
+-NORETURN(cpu_startup_entry)
+-NORETURN(do_exit)
+-NORETURN(do_group_exit)
+-NORETURN(do_task_dead)
+-NORETURN(ex_handler_msr_mce)
+-NORETURN(hlt_play_dead)
+-NORETURN(hv_ghcb_terminate)
+-NORETURN(kthread_complete_and_exit)
+-NORETURN(kthread_exit)
+-NORETURN(kunit_try_catch_throw)
+-NORETURN(machine_real_restart)
+-NORETURN(make_task_dead)
+-NORETURN(mpt_halt_firmware)
+-NORETURN(nmi_panic_self_stop)
+-NORETURN(panic)
+-NORETURN(panic_smp_self_stop)
+-NORETURN(rest_init)
+-NORETURN(rewind_stack_and_make_dead)
+-NORETURN(sev_es_terminate)
+-NORETURN(snp_abort)
+-NORETURN(start_kernel)
+-NORETURN(stop_this_cpu)
+-NORETURN(usercopy_abort)
+-NORETURN(x86_64_start_kernel)
+-NORETURN(x86_64_start_reservations)
+-NORETURN(xen_cpu_bringup_again)
+-NORETURN(xen_start_kernel)
++__NORETURN(__fortify_panic)
++__NORETURN(__kunit_abort)
++__NORETURN(__module_put_and_kthread_exit)
++__NORETURN(__reiserfs_panic)
++__NORETURN(__stack_chk_fail)
++__NORETURN(__tdx_hypercall_failed)
++__NORETURN(__ubsan_handle_builtin_unreachable)
++__NORETURN(arch_cpu_idle_dead)
++__NORETURN(bch2_trans_in_restart_error)
++__NORETURN(bch2_trans_restart_error)
++__NORETURN(cpu_bringup_and_idle)
++__NORETURN(cpu_startup_entry)
++__NORETURN(do_exit)
++__NORETURN(do_group_exit)
++__NORETURN(do_task_dead)
++__NORETURN(ex_handler_msr_mce)
++__NORETURN(hlt_play_dead)
++__NORETURN(hv_ghcb_terminate)
++__NORETURN(kthread_complete_and_exit)
++__NORETURN(kthread_exit)
++__NORETURN(kunit_try_catch_throw)
++__NORETURN(machine_real_restart)
++__NORETURN(make_task_dead)
++__NORETURN(mpt_halt_firmware)
++__NORETURN(nmi_panic_self_stop)
++__NORETURN(panic)
++__NORETURN(panic_smp_self_stop)
++__NORETURN(rest_init)
++__NORETURN(rewind_stack_and_make_dead)
++__NORETURN(sev_es_terminate)
++__NORETURN(snp_abort)
++__NORETURN(start_kernel)
++__NORETURN(stop_this_cpu)
++__NORETURN(usercopy_abort)
++__NORETURN(x86_64_start_kernel)
++__NORETURN(x86_64_start_reservations)
++__NORETURN(xen_cpu_bringup_again)
++__NORETURN(xen_start_kernel)
+diff -urNa kernel/linux-6.10/tools/perf/util/bpf_skel/vmlinux/vmlinux.h kernel/linux-6.10/tools/perf/util/bpf_skel/vmlinux/vmlinux.h
+--- kernel/linux-6.10/tools/perf/util/bpf_skel/vmlinux/vmlinux.h	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/tools/perf/util/bpf_skel/vmlinux/vmlinux.h	2024-07-22 15:19:25.930828104 +0900
+@@ -39,9 +39,11 @@
+ 	BLOCK_SOFTIRQ,
+ 	IRQ_POLL_SOFTIRQ,
+ 	TASKLET_SOFTIRQ,
++	ULK_HI_SOFTIRQ,
+ 	SCHED_SOFTIRQ,
+ 	HRTIMER_SOFTIRQ,
+ 	RCU_SOFTIRQ,    /* Preferable RCU should always be the last softirq */
++	ULK_SOFTIRQ,
+ 
+ 	NR_SOFTIRQS
+ };
+diff -urNa kernel/linux-6.10/tools/perf/util/trace-event-parse.c kernel/linux-6.10/tools/perf/util/trace-event-parse.c
+--- kernel/linux-6.10/tools/perf/util/trace-event-parse.c	2024-07-15 07:43:32.000000000 +0900
++++ kernel/linux-6.10/tools/perf/util/trace-event-parse.c	2024-07-22 15:20:41.868561181 +0900
+@@ -301,9 +301,11 @@
+ 	{ "BLOCK_SOFTIRQ", 4 },
+ 	{ "IRQ_POLL_SOFTIRQ", 5 },
+ 	{ "TASKLET_SOFTIRQ", 6 },
++	{ "ULK_HI_SOFTIRQ", 7 },
+ 	{ "SCHED_SOFTIRQ", 7 },
+ 	{ "HRTIMER_SOFTIRQ", 8 },
+ 	{ "RCU_SOFTIRQ", 9 },
++	{ "ULK_SOFTIRQ", 11 },
+ 
+ 	{ "HRTIMER_NORESTART", 0 },
+ 	{ "HRTIMER_RESTART", 1 },

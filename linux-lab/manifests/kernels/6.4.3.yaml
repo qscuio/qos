@@ -12,7 +12,7 @@ supported_profiles:
 required_profiles: []
 default_compat: false
 source_url: "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.4.3.tar.xz"
-source_sha256: "phase1-placeholder"
+source_sha256: "7134ed29360df6f37a26410630283f0592c91a6d2178a9648226d30ddf8c88a1"
 patch_set: "linux-lab/patches/linux-6.4.3/kernel.patch"
 config_family: "modern"
 tool_groups:

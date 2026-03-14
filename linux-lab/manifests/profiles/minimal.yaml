@@ -8,7 +8,7 @@ replaces:
   - "samples"
   - "debug-tools"
 expands_to: []
-fragment_ref: null
+fragment_ref: "linux-lab/fragments/minimal.conf"
 compatible_kernels:
   - "*"
 compatible_arches:

@@ -1,0 +1,12 @@
+diff -urNa kernel/linux-4.19.317/tools/perf/bench/sched-messaging.c kernel/linux-4.19.317/tools/perf/bench/sched-messaging.c
+--- kernel/linux-4.19.317/tools/perf/bench/sched-messaging.c	2024-07-05 16:00:36.000000000 +0900
++++ kernel/linux-4.19.317/tools/perf/bench/sched-messaging.c	2024-07-07 01:26:12.419104652 +0900
+@@ -69,7 +69,7 @@
+ /* Block until we're ready to go */
+ static void ready(int ready_out, int wakefd)
+ {
+-	char dummy;
++	char dummy = 0;
+ 	struct pollfd pollfd = { .fd = wakefd, .events = POLLIN };
+ 
+ 	/* Tell them we're ready. */

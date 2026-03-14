@@ -3,7 +3,7 @@ kind: "concrete"
 precedence: 30
 replaces: []
 expands_to: []
-fragment_ref: "linux-lab/fragments/rust.yaml"
+fragment_ref: "linux-lab/fragments/rust.conf"
 compatible_kernels:
   - "*"
 compatible_arches:

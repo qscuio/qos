@@ -3,7 +3,7 @@ kind: "concrete"
 precedence: 10
 replaces: []
 expands_to: []
-fragment_ref: "linux-lab/fragments/debug.yaml"
+fragment_ref: "linux-lab/fragments/debug.conf"
 compatible_kernels:
   - "*"
 compatible_arches:
