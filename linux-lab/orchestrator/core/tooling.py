@@ -135,11 +135,22 @@ def resolve_tool_plan(*, tool_keys: list[str], linux_lab_root: Path) -> list[dic
     return plan
 
 
+def resolve_kernel_workspace_paths(*, request) -> dict[str, Path]:
+    workspace_root = Path(request.artifact_root).resolve() / "workspace"
+    kernel_tree = workspace_root / "kernel" / f"linux-{request.kernel_version}"
+    return {
+        "workspace_root": workspace_root,
+        "build_root": workspace_root / "build",
+        "kernel_tree": kernel_tree,
+        "tools_root": kernel_tree / "tools",
+    }
+
+
 def resolve_kernel_tool_plan(*, request, manifests) -> list[dict[str, Any]]:
     arch = manifests.arches[request.arch]
-    workspace_root = Path(request.artifact_root).resolve() / "workspace"
-    build_root = workspace_root / "build"
-    kernel_tree = workspace_root / "kernel" / f"linux-{request.kernel_version}"
+    kernel_workspace = resolve_kernel_workspace_paths(request=request)
+    build_root = kernel_workspace["build_root"]
+    tools_root = kernel_workspace["tools_root"]
     return [
         {
             "name": "tools/libapi",
@@ -156,7 +167,7 @@ def resolve_kernel_tool_plan(*, request, manifests) -> list[dict[str, Any]]:
             "command": [
                 "make",
                 "-C",
-                str(kernel_tree / "tools"),
+                str(tools_root),
                 f"O={build_root}",
                 "subdir=tools",
                 "all",

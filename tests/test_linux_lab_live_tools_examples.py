@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LINUX_LAB_ROOT = ROOT / "linux-lab"
 BUILD_TOOLS_STAGE = ROOT / "linux-lab" / "orchestrator" / "stages" / "build_tools.py"
 BUILD_EXAMPLES_STAGE = ROOT / "linux-lab" / "orchestrator" / "stages" / "build_examples.py"
+STAGES_MODULE = ROOT / "linux-lab" / "orchestrator" / "core" / "stages.py"
 STATE_MODULE = ROOT / "linux-lab" / "orchestrator" / "core" / "state.py"
 
 
@@ -21,6 +24,7 @@ def _load_module(name: str, path: Path) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -39,42 +43,60 @@ def _git_init(path: Path) -> None:
     )
 
 
-def _write_tool_manifest(root: Path, key: str, repo_url: str) -> None:
+def _render_yaml_command(command: list[str]) -> str:
+    rendered = ", ".join(f'"{part}"' for part in command)
+    return f"  - [{rendered}]"
+
+
+def _write_custom_tool_manifest(
+    root: Path,
+    *,
+    key: str,
+    repo_url: str,
+    build_policy: str = "host-build",
+    build_workdir: str | None = None,
+    prepare_commands: list[list[str]] | None = None,
+    build_commands: list[list[str]] | None = None,
+    guest_build_commands: list[list[str]] | None = None,
+    post_prepare_asset_copies: list[dict[str, str]] | None = None,
+) -> None:
     (root / "tools").mkdir(parents=True, exist_ok=True)
-    (root / "tools" / f"{key}.yaml").write_text(
-        "\n".join(
-            [
-                f'key: "{key}"',
-                f'repo_url: "{repo_url}"',
-                f'checkout_dir: "build/linux-lab/tools/{key}"',
-                "prepare_commands:",
-                '  - ["sh", "-c", "printf prepared > prepared.txt"]',
-                "build_commands:",
-                '  - ["sh", "-c", "printf built > built.txt"]',
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    lines = [
+        f'key: "{key}"',
+        f'repo_url: "{repo_url}"',
+        f'checkout_dir: "build/linux-lab/tools/{key}"',
+        f'build_policy: "{build_policy}"',
+    ]
+    if build_workdir is not None:
+        lines.append(f'build_workdir: "{build_workdir}"')
+    lines.append("prepare_commands:")
+    for command in prepare_commands or [['sh', '-c', 'printf prepared > prepared.txt']]:
+        lines.append(_render_yaml_command(command))
+    lines.append("build_commands:")
+    for command in build_commands or [['sh', '-c', 'printf built > built.txt']]:
+        lines.append(_render_yaml_command(command))
+    lines.append("guest_build_commands:")
+    for command in guest_build_commands or []:
+        lines.append(_render_yaml_command(command))
+    lines.append("post_prepare_asset_copies:")
+    for copy_rule in post_prepare_asset_copies or []:
+        lines.append(f'  - from: "{copy_rule["from"]}"')
+        lines.append(f'    to: "{copy_rule["to"]}"')
+    lines.append("")
+    (root / "tools" / f"{key}.yaml").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_tool_manifest(root: Path, key: str, repo_url: str) -> None:
+    _write_custom_tool_manifest(root, key=key, repo_url=repo_url)
 
 
 def _write_tool_manifest_with_build_workdir(root: Path, key: str, repo_url: str, build_workdir: str) -> None:
-    (root / "tools").mkdir(parents=True, exist_ok=True)
-    (root / "tools" / f"{key}.yaml").write_text(
-        "\n".join(
-            [
-                f'key: "{key}"',
-                f'repo_url: "{repo_url}"',
-                f'checkout_dir: "build/linux-lab/tools/{key}"',
-                f'build_workdir: "{build_workdir}"',
-                "prepare_commands:",
-                '  - ["sh", "-c", "mkdir -p examples/c && printf prepared > prepared.txt"]',
-                "build_commands:",
-                '  - ["sh", "-c", "printf built > built.txt"]',
-                "",
-            ]
-        ),
-        encoding="utf-8",
+    _write_custom_tool_manifest(
+        root,
+        key=key,
+        repo_url=repo_url,
+        build_workdir=build_workdir,
+        prepare_commands=[["sh", "-c", "mkdir -p examples/c && printf prepared > prepared.txt"]],
     )
 
 
@@ -155,6 +177,23 @@ def _make_request(tmp_path: Path) -> object:
     )
 
 
+def _write_fake_make(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'marker="${LINUX_LAB_FAKE_MAKE_MARKER:?missing fake make marker}"',
+                'printf "cwd=%s args=%s\\n" "$PWD" "$*" >> "$marker"',
+                "exit 0",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
 def test_build_tools_stage_executes_local_tool_plan(tmp_path: Path, monkeypatch) -> None:
     build_tools_mod = _load_module("linux_lab_build_tools_live", BUILD_TOOLS_STAGE)
     state_mod = _load_module("linux_lab_state_tools_live", STATE_MODULE)
@@ -228,6 +267,216 @@ def test_build_tools_stage_executes_tool_builds_in_manifest_subdirectory(tmp_pat
     assert (checkout / "examples" / "c" / "built.txt").read_text(encoding="utf-8") == "built"
 
 
+def test_build_tools_stage_executes_asset_copy_guest_skip_and_kernel_tools(tmp_path: Path, monkeypatch) -> None:
+    build_tools_mod = _load_module("linux_lab_build_tools_asset_guest_kernel_live", BUILD_TOOLS_STAGE)
+    state_mod = _load_module("linux_lab_state_asset_guest_kernel_live", STATE_MODULE)
+
+    labroot = tmp_path / "labroot"
+    asset_source = labroot / "tools" / "assets" / "crash" / "extensions"
+    asset_source.mkdir(parents=True, exist_ok=True)
+    (asset_source / "echo.c").write_text("fixture extension\n", encoding="utf-8")
+
+    crash_repo = tmp_path / "repos" / "crash"
+    cgdb_repo = tmp_path / "repos" / "cgdb"
+    libbpf_repo = tmp_path / "repos" / "libbpf-bootstrap"
+    retsnoop_repo = tmp_path / "repos" / "retsnoop"
+    for repo in (crash_repo, cgdb_repo, libbpf_repo, retsnoop_repo):
+        _git_init(repo)
+
+    _write_custom_tool_manifest(
+        labroot,
+        key="crash",
+        repo_url=str(crash_repo),
+        prepare_commands=[["sh", "-c", "mkdir -p extensions && printf crash-prepared > prepared.txt"]],
+        build_commands=[["sh", "-c", "printf crash-built > built.txt"]],
+        post_prepare_asset_copies=[
+            {
+                "from": "linux-lab/tools/assets/crash/extensions/",
+                "to": "extensions/",
+            }
+        ],
+    )
+    _write_custom_tool_manifest(
+        labroot,
+        key="cgdb",
+        repo_url=str(cgdb_repo),
+        prepare_commands=[["sh", "-c", "printf cgdb-prepared > prepared.txt"]],
+        build_commands=[["sh", "-c", "printf cgdb-built > built.txt"]],
+    )
+    _write_custom_tool_manifest(
+        labroot,
+        key="libbpf-bootstrap",
+        repo_url=str(libbpf_repo),
+        build_policy="guest-build",
+        build_workdir="examples/c",
+        prepare_commands=[["sh", "-c", "mkdir -p examples/c && printf libbpf-prepared > prepared.txt"]],
+        build_commands=[["sh", "-c", "printf host-build-should-not-run > host-built.txt"]],
+        guest_build_commands=[["make", "minimal"]],
+    )
+    _write_custom_tool_manifest(
+        labroot,
+        key="retsnoop",
+        repo_url=str(retsnoop_repo),
+        build_policy="guest-build",
+        prepare_commands=[["sh", "-c", "printf retsnoop-prepared > prepared.txt"]],
+        build_commands=[["sh", "-c", "printf host-build-should-not-run > host-built.txt"]],
+        guest_build_commands=[["make"]],
+    )
+    monkeypatch.setenv("LINUX_LAB_ROOT_OVERRIDE", str(labroot))
+
+    request = _make_request(tmp_path)
+    request.profiles = ["default-lab"]
+    request_root = Path(request.artifact_root)
+    state_mod.ensure_request_dirs(request_root)
+    (request_root / "workspace" / "build").mkdir(parents=True, exist_ok=True)
+    (request_root / "workspace" / "kernel" / "linux-fixture" / "tools").mkdir(parents=True, exist_ok=True)
+
+    fakebin = tmp_path / "fakebin"
+    _write_fake_make(fakebin / "make")
+    marker_path = request_root / "workspace" / "kernel-tools.marker"
+    monkeypatch.setenv("LINUX_LAB_FAKE_MAKE_MARKER", str(marker_path))
+    monkeypatch.setenv("PATH", f"{fakebin}:{os.environ['PATH']}")
+
+    manifests = SimpleNamespace(
+        kernels={"fixture": SimpleNamespace(tool_groups=["kernel-tools"], example_groups=[])},
+        arches={"x86_64": SimpleNamespace(toolchain_prefix="")},
+        profiles={
+            "default-lab": SimpleNamespace(
+                tool_groups=["debug-tools", "bpf-core"],
+                host_tools=[],
+                example_groups=[],
+            )
+        },
+    )
+
+    result = build_tools_mod.STAGE.executor(request, manifests, request_root)
+
+    assert result["status"] == "succeeded"
+    crash_checkout = tmp_path / "build" / "linux-lab" / "tools" / "crash"
+    assert (crash_checkout / "prepared.txt").read_text(encoding="utf-8") == "crash-prepared"
+    assert (crash_checkout / "built.txt").read_text(encoding="utf-8") == "crash-built"
+    assert (crash_checkout / "extensions" / "echo.c").read_text(encoding="utf-8") == "fixture extension\n"
+
+    libbpf_checkout = tmp_path / "build" / "linux-lab" / "tools" / "libbpf-bootstrap"
+    assert (libbpf_checkout / ".git").exists()
+    assert (libbpf_checkout / "prepared.txt").read_text(encoding="utf-8") == "libbpf-prepared"
+    assert not (libbpf_checkout / "examples" / "c" / "host-built.txt").exists()
+
+    retsnoop_checkout = tmp_path / "build" / "linux-lab" / "tools" / "retsnoop"
+    assert (retsnoop_checkout / ".git").exists()
+    assert (retsnoop_checkout / "prepared.txt").read_text(encoding="utf-8") == "retsnoop-prepared"
+    assert not (retsnoop_checkout / "host-built.txt").exists()
+
+    external_tools = {item["key"]: item for item in result["metadata"]["external_tools"]}
+    assert external_tools["libbpf-bootstrap"]["build_policy"] == "guest-build"
+    assert external_tools["libbpf-bootstrap"]["guest_build_commands"] == [["make", "minimal"]]
+    assert external_tools["retsnoop"]["build_policy"] == "guest-build"
+    assert external_tools["retsnoop"]["guest_build_commands"] == [["make"]]
+
+    marker_lines = marker_path.read_text(encoding="utf-8").splitlines()
+    assert len(marker_lines) == 2
+    assert all(line.startswith(f"cwd={request_root / 'workspace'} args=") for line in marker_lines)
+    assert any("tools/libapi" in line for line in marker_lines)
+    assert any("subdir=tools all" in line for line in marker_lines)
+
+    log_text = (request_root / "logs" / "build-tools.log").read_text(encoding="utf-8")
+    assert log_text.index("$ sh -c printf crash-built > built.txt") < log_text.index("$ make O=")
+
+
+def test_build_tools_stage_returns_failed_state_for_missing_crash_assets(tmp_path: Path, monkeypatch) -> None:
+    build_tools_mod = _load_module("linux_lab_build_tools_missing_assets_live", BUILD_TOOLS_STAGE)
+    stages_mod = _load_module("linux_lab_core_stages_missing_assets_live", STAGES_MODULE)
+
+    labroot = tmp_path / "labroot"
+    crash_repo = tmp_path / "repos" / "crash"
+    cgdb_repo = tmp_path / "repos" / "cgdb"
+    _git_init(crash_repo)
+    _git_init(cgdb_repo)
+    _write_custom_tool_manifest(
+        labroot,
+        key="crash",
+        repo_url=str(crash_repo),
+        prepare_commands=[["sh", "-c", "mkdir -p extensions && printf crash-prepared > prepared.txt"]],
+        build_commands=[["sh", "-c", "printf crash-built > built.txt"]],
+        post_prepare_asset_copies=[
+            {
+                "from": "linux-lab/tools/assets/crash/extensions/",
+                "to": "extensions/",
+            }
+        ],
+    )
+    _write_tool_manifest(labroot, "cgdb", str(cgdb_repo))
+    monkeypatch.setenv("LINUX_LAB_ROOT_OVERRIDE", str(labroot))
+
+    request = _make_request(tmp_path)
+    request.profiles = ["debug-tools"]
+    manifests = SimpleNamespace(
+        kernels={"fixture": SimpleNamespace(tool_groups=[], example_groups=[])},
+        arches={"x86_64": SimpleNamespace(toolchain_prefix="")},
+        profiles={
+            "debug-tools": SimpleNamespace(
+                tool_groups=["debug-tools"],
+                host_tools=[],
+                example_groups=[],
+            )
+        },
+    )
+
+    stages_mod.execute_plan(request, manifests, [build_tools_mod.STAGE])
+
+    request_root = Path(request.artifact_root)
+    state_path = request_root / "state" / "build-tools.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    expected_message = f"missing crash extension asset source: {labroot / 'tools' / 'assets' / 'crash' / 'extensions'}"
+    assert state["status"] == "failed"
+    assert state["error_kind"] == "missing-asset"
+    assert state["error_message"] == expected_message
+    assert expected_message in (request_root / "logs" / "build-tools.log").read_text(encoding="utf-8")
+    assert not (tmp_path / "build" / "linux-lab" / "tools" / "crash" / "built.txt").exists()
+
+
+def test_build_tools_stage_returns_failed_state_for_missing_kernel_workspace(tmp_path: Path, monkeypatch) -> None:
+    build_tools_mod = _load_module("linux_lab_build_tools_missing_kernel_workspace_live", BUILD_TOOLS_STAGE)
+    stages_mod = _load_module("linux_lab_core_stages_missing_kernel_workspace_live", STAGES_MODULE)
+
+    labroot = tmp_path / "labroot"
+    monkeypatch.setenv("LINUX_LAB_ROOT_OVERRIDE", str(labroot))
+
+    fakebin = tmp_path / "fakebin"
+    _write_fake_make(fakebin / "make")
+    marker_path = tmp_path / "kernel-tools.marker"
+    monkeypatch.setenv("LINUX_LAB_FAKE_MAKE_MARKER", str(marker_path))
+    monkeypatch.setenv("PATH", f"{fakebin}:{os.environ['PATH']}")
+
+    request = _make_request(tmp_path)
+    request.profiles = ["default-lab"]
+    request_root = Path(request.artifact_root)
+    (request_root / "workspace" / "build").mkdir(parents=True, exist_ok=True)
+    manifests = SimpleNamespace(
+        kernels={"fixture": SimpleNamespace(tool_groups=["kernel-tools"], example_groups=[])},
+        arches={"x86_64": SimpleNamespace(toolchain_prefix="")},
+        profiles={
+            "default-lab": SimpleNamespace(
+                tool_groups=[],
+                host_tools=[],
+                example_groups=[],
+            )
+        },
+    )
+
+    stages_mod.execute_plan(request, manifests, [build_tools_mod.STAGE])
+
+    state_path = request_root / "state" / "build-tools.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    missing_path = request_root / "workspace" / "kernel" / "linux-fixture" / "tools"
+    expected_message = f"missing kernel workspace: {missing_path}"
+    assert state["status"] == "failed"
+    assert state["error_kind"] == "missing-kernel-workspace"
+    assert state["error_message"] == expected_message
+    assert expected_message in (request_root / "logs" / "build-tools.log").read_text(encoding="utf-8")
+    assert not marker_path.exists()
+
+
 def test_build_examples_stage_executes_local_example_plan(tmp_path: Path, monkeypatch) -> None:
     build_examples_mod = _load_module("linux_lab_build_examples_live", BUILD_EXAMPLES_STAGE)
     state_mod = _load_module("linux_lab_state_examples_live", STATE_MODULE)
@@ -252,7 +501,7 @@ def test_build_examples_stage_executes_local_example_plan(tmp_path: Path, monkey
 
     for filename in ("poll.c", "char_file.c", "netlink_demo.c"):
         (userspace_app / filename).write_text("int main(void) { return 0; }\n", encoding="utf-8")
-    (rust_user / "Makefile").write_text("all:\n\tprintf built > rust-user.ok\n", encoding="utf-8")
+    (rust_user / "Makefile").write_text("all:\n\tpwd > rust-user.ok\n", encoding="utf-8")
     (rust_root / "hello_rust.rs").write_text("// rust sample\n", encoding="utf-8")
     (rust_root / "rust_chardev.rs").write_text("// rust chardev\n", encoding="utf-8")
     for filename in ("hello.c", "packet_filter.c", "tracing.c", "xdp.c", "open.c"):
@@ -330,7 +579,7 @@ def test_build_examples_stage_executes_local_example_plan(tmp_path: Path, monkey
         assert (module_dir / "module.ok").read_text(encoding="utf-8") == "built"
     for binary in ("poll", "char_file", "netlink_demo"):
         assert (userspace_app / binary).is_file()
-    assert (rust_user / "rust-user.ok").read_text(encoding="utf-8") == "built"
+    assert (rust_user / "rust-user.ok").read_text(encoding="utf-8").strip() == str(rust_user)
     for obj in ("hello.o", "packet_filter.o", "tracing.o", "xdp.o", "open.o"):
         assert (bpf_dir / obj).is_file()
 
