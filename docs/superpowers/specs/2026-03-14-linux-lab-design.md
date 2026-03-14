@@ -114,6 +114,26 @@ qos/
 
 The orchestrator is responsible for policy and state. Shell helpers are allowed only for narrow system-facing leaf operations such as invoking `make`, `debootstrap`, or QEMU.
 
+### Phase 1 CLI Contract
+
+Phase 1 exposes exactly two native commands:
+
+- `validate`: parse inputs, resolve manifests, perform non-mutating prerequisite checks, and exit without writing placeholder stage state
+- `plan`: perform `validate`, then execute the Phase 1 stage graph in placeholder mode and write state records under `build/linux-lab/.../state/`
+
+Phase 1 does not expose a native `run` command yet.
+
+Exit rules:
+
+- `validate` exits `0` only when request resolution and prerequisite checks succeed
+- `plan` exits `0` only when request resolution, prerequisite checks, and placeholder stage-state emission succeed
+- both commands exit non-zero on validation or prerequisite failure
+
+Compatibility-mode rule:
+
+- `linux-lab/bin/ulk` maps to the native `plan` command in Phase 1
+- a successful Phase 1 `ulk` invocation means "request accepted and placeholder stage plan emitted", not "kernel build or boot completed"
+
 ### Resolved Request Model
 
 Every execution resolves to one normalized request object. The minimum schema is:
@@ -157,7 +177,7 @@ The compatibility entrypoint must:
 
 - accept the existing key-value argument shape used by `qulk`
 - normalize arguments into a native request model
-- call the orchestrator CLI
+- call the native `plan` command in Phase 1
 - log the resolved request so users can see the manifest-based execution path
 
 It must not contain orchestration policy beyond parsing and translation.
@@ -220,6 +240,11 @@ Each image manifest defines:
 
 The initial image parity target is driven by the current `qulk` release defaults and the existing `noble` and `jammy` assets.
 
+The explicit Phase 1 image manifest keys are:
+
+- `noble` with `default_compat: true`
+- `jammy`
+
 ### Profile Manifests
 
 `linux-lab/manifests/profiles/<name>.yaml`
@@ -230,7 +255,7 @@ Each profile groups optional capabilities such as:
 - `bpf`
 - `rust`
 - `samples`
-- `crash`
+- `debug-tools`
 - `minimal`
 
 Profiles own:
@@ -240,6 +265,24 @@ Profiles own:
 - post-build steps
 - example groups to build
 - compatibility constraints by kernel or arch
+
+The explicit Phase 1 profile keys are:
+
+- `debug`
+- `bpf`
+- `rust`
+- `samples`
+- `debug-tools`
+- `minimal`
+- `default-lab`
+
+`default-lab` is a meta-profile used by compatibility mode. In Phase 1 it expands, in this order, to:
+
+1. `debug`
+2. `bpf`
+3. `rust`
+4. `samples`
+5. `debug-tools`
 
 ## Execution Model
 
@@ -310,10 +353,10 @@ This contract is the minimum needed to make stages independently implementable a
 
 Native user-facing CLI. Responsible for:
 
-- parsing native commands
-- resolving manifests into a request
-- selecting stages
-- invoking the runtime
+- parsing native commands and raw arguments
+- invoking `orchestrator/core` for request resolution
+- selecting the top-level operation (`validate` or `plan`)
+- rendering user-facing output and exit codes
 
 ### `orchestrator/core`
 
@@ -321,10 +364,11 @@ Shared execution runtime. Responsible for:
 
 - manifest loading and validation
 - request resolution
+- stage planning
 - state and cache bookkeeping
 - structured logs
 - failure normalization
-- stage dependency planning
+- invoking stage implementations
 
 ### `orchestrator/stages`
 
@@ -334,10 +378,10 @@ One implementation module per stage. Each stage owns one concern only:
 - `prepare`
 - `patch`
 - `configure`
-- `build_kernel`
-- `build_tools`
-- `build_examples`
-- `build_image`
+- `build-kernel`
+- `build-tools`
+- `build-examples`
+- `build-image`
 - `boot`
 
 ### `fragments/`
@@ -413,7 +457,7 @@ Required touchpoints:
 
 Phase 1 touchpoints are intentionally narrow:
 
-- `Makefile` target(s) to validate or plan Linux-lab requests
+- `Makefile` targets `linux-lab-validate` and `linux-lab-plan`
 - pytest entrypoints for manifest/runtime tests
 - README note that `linux-lab` exists and is in bootstrap state
 - ignore coverage for `build/linux-lab/`
