@@ -199,6 +199,12 @@ The supported compatibility keys in Phase 1 are exactly:
 
 No other `ulk` keys are accepted in Phase 1.
 
+Compatibility parser rules in Phase 1:
+
+- every compatibility argument must be exactly `key=value`
+- malformed arguments are validation errors
+- duplicate keys are validation errors
+
 Compatibility normalization rules:
 
 - `amd64` normalizes to `x86_64`
@@ -318,6 +324,8 @@ Unsupported combination validation in Phase 1 uses only manifest-owned fields:
 - `image.mirror_regions`
 - `profile.compatible_kernels`
 - `profile.compatible_arches`
+
+`kernel.required_profiles` is strict in Phase 1. Missing required profiles are validation errors; they are not auto-added during request resolution.
 
 ### Kernel Manifests
 
@@ -483,6 +491,53 @@ build/linux-lab/requests/<request-fingerprint>/
 Phase 1 does not need stage-result caching beyond this fingerprinted request root. Resumable reuse across mutable build artifacts starts in later phases.
 
 If `plan` is re-run with the same request fingerprint in Phase 1, it overwrites `request.json`, `validate.json`, and `<stage>.json` in place. Phase 1 always re-emits the full stage-state set in dependency order and does not skip unchanged placeholder stages. Historical run retention is a later-phase concern.
+
+`validate.json` is emitted only by the `plan` command and follows the same result schema as other stage-state files, with `stage` set to `validate`.
+
+Phase 1 state examples:
+
+```json
+{
+  "kernel_version": "6.18.4",
+  "arch": "x86_64",
+  "image_release": "noble",
+  "profiles": ["debug", "bpf", "rust", "samples", "debug-tools"],
+  "mirror_region": null,
+  "compat_mode": false,
+  "legacy_args": {},
+  "artifact_root": "build/linux-lab/requests/2a4b..."
+}
+```
+
+```json
+{
+  "stage": "validate",
+  "status": "succeeded",
+  "started_at": "2026-03-14T12:00:00Z",
+  "ended_at": "2026-03-14T12:00:00Z",
+  "request_fingerprint": "2a4b...",
+  "inputs": ["resolved-request"],
+  "outputs": ["resolved-request"],
+  "log_path": "build/linux-lab/requests/2a4b.../logs/validate.log",
+  "error_kind": null,
+  "error_message": null
+}
+```
+
+```json
+{
+  "stage": "build-image",
+  "status": "placeholder",
+  "started_at": "2026-03-14T12:00:01Z",
+  "ended_at": "2026-03-14T12:00:01Z",
+  "request_fingerprint": "2a4b...",
+  "inputs": ["resolved-request", "kernel-plan", "tools-plan", "examples-plan"],
+  "outputs": ["image-plan"],
+  "log_path": "build/linux-lab/requests/2a4b.../logs/build-image.log",
+  "error_kind": null,
+  "error_message": null
+}
+```
 
 ### Stage Contract
 
@@ -710,10 +765,10 @@ The port needs tests at four levels.
 
 #### Fixture and Mapping Tests
 
-- known kernel manifests map to the right patch references and supported profile sets
+- known kernel manifests map to the right placeholder patch references and supported profile sets
 - arch manifests expose the expected toolchain and QEMU settings
 - image manifests cover supported release defaults and mirror overrides
-- profile manifests map to the right config fragments, tool groups, and example groups
+- profile manifests map to the right placeholder fragment references, tool groups, and example groups
 
 #### Stage Tests
 
