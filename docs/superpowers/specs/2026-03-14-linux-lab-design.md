@@ -118,16 +118,17 @@ The orchestrator is responsible for policy and state. Shell helpers are allowed 
 
 Phase 1 exposes exactly two native commands:
 
-- `validate`: parse inputs, resolve manifests, perform non-mutating prerequisite checks, and exit without writing placeholder stage state
-- `plan`: perform `validate`, then execute the Phase 1 stage graph in placeholder mode and write state records under `build/linux-lab/.../state/`
+- `validate`: parse inputs, normalize compatibility arguments, and resolve manifests statically without running stages
+- `plan`: perform `validate`, then execute the Phase 1 stage graph and write stage state records under the resolved request directory
 
 Phase 1 does not expose a native `run` command yet.
 
 Exit rules:
 
-- `validate` exits `0` only when request resolution and prerequisite checks succeed
-- `plan` exits `0` only when request resolution, prerequisite checks, and placeholder stage-state emission succeed
-- both commands exit non-zero on validation or prerequisite failure
+- `validate` exits `0` only when static request resolution succeeds
+- `plan` exits `0` only when static request resolution succeeds and the Phase 1 stage graph completes
+- both commands exit non-zero on validation failure
+- only `plan` may surface stage-level failures
 
 Compatibility-mode rule:
 
@@ -146,6 +147,14 @@ Every execution resolves to one normalized request object. The minimum schema is
 - `compat_mode`: boolean set when entered through `bin/ulk`
 - `legacy_args`: normalized map of accepted compatibility arguments
 - `artifact_root`: resolved output directory under `build/linux-lab/`
+
+The supported compatibility keys in Phase 1 are exactly:
+
+- `arch`
+- `kernel`
+- `mirror`
+
+No other `ulk` keys are accepted in Phase 1.
 
 Compatibility normalization rules:
 
@@ -201,11 +210,14 @@ Each kernel manifest defines:
 
 The initial parity set should include the versions already present in `qulk`:
 
+- `6.18.4` with `default_compat: true`
 - `4.19.317`
 - `6.4.3`
 - `6.9.6`
 - `6.9.8`
 - `6.10`
+
+Phase 1 requires only schema-valid kernel manifest entries for these versions. Porting actual patch assets and full config parity remains Phase 2 work.
 
 ### Architecture Manifests
 
@@ -238,12 +250,12 @@ Each image manifest defines:
 - default guest networking assumptions
 - shared-directory and login conventions where still needed
 
-The initial image parity target is driven by the current `qulk` release defaults and the existing `noble` and `jammy` assets.
-
 The explicit Phase 1 image manifest keys are:
 
 - `noble` with `default_compat: true`
 - `jammy`
+
+Phase 1 requires only schema-valid image manifest entries for these keys. Real image-build recipes remain Phase 3 work.
 
 ### Profile Manifests
 
@@ -284,6 +296,8 @@ The explicit Phase 1 profile keys are:
 4. `samples`
 5. `debug-tools`
 
+Phase 1 requires only schema-valid profile manifests for these keys. Real config fragments and example onboarding remain later-phase work.
+
 ## Execution Model
 
 Every request flows through the same stage graph:
@@ -306,9 +320,34 @@ Stage execution rules:
 - reruns may skip clean stages if inputs and manifest fingerprints have not changed
 - fallback delegation to retained helper logic is allowed during migration, but the logs must state when a fallback path was used
 
-Canonical artifact root:
+Canonical request root:
 
-`build/linux-lab/<kernel-version>/<arch>/<image>/<profile-set>/`
+`build/linux-lab/requests/<request-fingerprint>/`
+
+`request-fingerprint` is a deterministic hash over:
+
+- `kernel_version`
+- `arch`
+- `image_release`
+- normalized `profile-set`
+- `mirror_region`
+- `compat_mode`
+- orchestrator schema version
+
+The minimum Phase 1 request directory layout is:
+
+```text
+build/linux-lab/requests/<request-fingerprint>/
+├── request.json
+├── state/
+│   ├── validate.json
+│   └── <stage>.json
+└── logs/
+```
+
+Phase 1 does not need stage-result caching beyond this fingerprinted request root. Resumable reuse across mutable build artifacts starts in later phases.
+
+If `plan` is re-run with the same request fingerprint in Phase 1, it overwrites `request.json`, `validate.json`, and `<stage>.json` in place. Historical run retention is a later-phase concern.
 
 ### Stage Contract
 
@@ -466,17 +505,18 @@ Phase 1 touchpoints are intentionally narrow:
 
 Error handling is stage-scoped and resumable.
 
-- manifest validation fails early for unknown kernel versions, unsupported arch/profile combinations, missing patch files, or incomplete image recipes
+- manifest validation fails early for unknown kernel versions, unsupported arch/profile combinations, and unsupported compatibility arguments
 - each stage records start, end, input fingerprint, output paths, and failure reason in `state/`
 - successful stage outputs are not destroyed automatically on downstream failure
-- reruns default to reusing valid upstream outputs and re-executing the failed stage and its downstream dependents
+- in Phase 1, reruns are keyed only by request fingerprint and overwrite prior state for that same fingerprint
 - leaf-tool failures must surface the underlying command, exit code, and relevant log path
 
-Host prerequisite classification:
+Phase 1 failure classification:
 
 - manifest syntax, unknown arguments, and unsupported kernel/arch/profile combinations are `validation` errors before stage execution
-- missing host tools, missing privileges, blocked network access, or unavailable mirrors are `prerequisite` failures owned by the `prepare` stage
-- downstream failures from `make`, `git`, `debootstrap`, QEMU, or helper commands are `runtime` failures in the owning stage
+- Phase 1 `prepare` checks only local prerequisites needed to emit state, such as writable build paths and a usable Python runtime
+- Phase 1 does not probe network reachability, mirror health, cross-compilers, debootstrap, or QEMU availability
+- later phases may add stage-specific prerequisite failures when those stages begin performing real work
 
 The default behavior in all phases is to check prerequisites, not install or mutate the host automatically. Any future install-missing mode would require explicit follow-up design approval.
 
@@ -510,7 +550,7 @@ The port needs tests at four levels.
 #### Stage Tests
 
 - fetch and patch behavior against fixture manifests
-- configure stage fragment composition
+- configure stage placeholder planning
 - tool build planning
 - image and boot command assembly without needing a full system boot for every test
 
@@ -548,9 +588,9 @@ Phase 1 must execute a runnable request-resolution and stage-planning pipeline. 
 | Stage | Phase 1 status | Minimum required behavior |
 |------|----------------|---------------------------|
 | `fetch` | placeholder | declare planned source artifacts and record state |
-| `prepare` | implemented | validate host prerequisites without mutating the host |
-| `patch` | placeholder | resolve patch paths and record intended patch application |
-| `configure` | placeholder | resolve config families and profile fragments into planned outputs |
+| `prepare` | implemented | check only local prerequisites required for state emission and record results |
+| `patch` | placeholder | record referenced patch-manifest metadata without requiring patch files on disk |
+| `configure` | placeholder | record referenced config and profile metadata without requiring real fragments |
 | `build-kernel` | placeholder | record planned kernel artifact descriptors |
 | `build-tools` | placeholder | record planned tool artifact descriptors |
 | `build-examples` | placeholder | record planned example groups and artifact roots |
@@ -585,7 +625,7 @@ Phase 1 is complete when:
 - a native orchestrator CLI exists
 - `linux-lab/bin/ulk` translates the old argument form into the new request model
 - manifest schemas exist for kernels, arches, images, and profiles
-- the current `qulk` kernel patch versions and arch baselines are represented in manifests
+- schema-valid stub manifests exist for the supported Phase 1 kernel, arch, image, and profile keys
 - the stage graph and build-state recording exist
 - the Phase 1 stage table above is implemented exactly as the minimum supported behavior
 - root integration touchpoints are present for Makefile, pytest, README, and ignore coverage
