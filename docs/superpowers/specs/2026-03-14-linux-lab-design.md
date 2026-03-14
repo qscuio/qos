@@ -73,7 +73,8 @@ The next planning step after this spec review is limited to **Phase 1 only**. La
 qos/
 ├── linux-lab/
 │   ├── bin/
-│   │   └── ulk                     # compatibility entrypoint
+│   │   ├── ulk                     # compatibility entrypoint
+│   │   └── linux-lab               # native Phase 1 CLI entrypoint
 │   ├── orchestrator/
 │   │   ├── cli/                    # native command entrypoints
 │   │   ├── core/                   # manifest loading, resolution, state, logging
@@ -129,6 +130,8 @@ Exit rules:
 - `plan` exits `0` only when static request resolution succeeds and the Phase 1 stage graph completes
 - both commands exit non-zero on validation failure
 - only `plan` may surface stage-level failures
+
+`validate` is read-only in Phase 1. It does not create `request.json`, `validate.json`, or any stage-state files.
 
 Compatibility-mode rule:
 
@@ -186,6 +189,8 @@ Every execution resolves to one normalized request object. The minimum schema is
 - `legacy_args`: normalized map of accepted compatibility arguments
 - `artifact_root`: resolved output directory under `build/linux-lab/`
 
+In Phase 1, `artifact_root` is exactly `build/linux-lab/requests/<request-fingerprint>/`.
+
 The supported compatibility keys in Phase 1 are exactly:
 
 - `arch`
@@ -202,14 +207,21 @@ Compatibility normalization rules:
 - omitted `kernel` in compatibility mode resolves from the kernel manifest marked `default_compat: true`
 - omitted `image_release` in compatibility mode resolves from the image manifest marked `default_compat: true`
 - omitted profiles in compatibility mode resolve to the manifest-defined `default-lab` profile set
+- explicit `mirror_region` must be present in the selected image manifest's `mirror_regions`
 - unknown compatibility keys are validation errors, not ignored input
+
+Compatibility defaults are deterministic:
+
+- exactly one kernel manifest must set `default_compat: true`
+- exactly one image manifest must set `default_compat: true`
+- zero or multiple defaults in either manifest family are validation errors
 
 Profile composition rules:
 
 - profiles are resolved by key, then sorted by a manifest-defined precedence value and finally by name for deterministic path generation
 - the `profile-set` artifact path segment is the joined normalized profile keys in resolved order
-- profile fragments may append settings, dependencies, and example groups
-- conflicting scalar settings across profiles are validation errors unless one profile explicitly declares that it replaces the other
+- in Phase 1, profile planning is limited to `replaces`, `expands_to`, `tool_groups`, `example_groups`, and `post_build_refs`
+- Phase 1 does not define scalar profile settings or dependency graphs beyond meta-profile expansion and replacement
 - the resolved request written to state must include the fully expanded profile list and replacement decisions
 
 ### Compatibility Entry Point
@@ -245,6 +257,7 @@ Kernel manifest minimum fields:
 - `required_profiles`: optional list, default empty
 - `default_compat`: boolean
 - `source_url`: optional placeholder string
+- `source_sha256`: optional placeholder string
 - `patch_set`: optional placeholder string
 - `config_family`: optional placeholder string
 - `tool_groups`: optional list, default empty
@@ -282,6 +295,12 @@ Profile manifest minimum fields:
 - `example_groups`: optional list, default empty
 - `post_build_refs`: optional list, default empty
 
+Schema evolution rule:
+
+- Phase 1 fields above are the locked minimum contract for planning
+- later phases may extend these schemas with additional optional fields
+- later phases may not redefine the meaning of the Phase 1 fields above
+
 Phase 1 profile resolution order is:
 
 1. expand meta-profiles in listed order
@@ -296,6 +315,7 @@ Unsupported combination validation in Phase 1 uses only manifest-owned fields:
 - `kernel.supported_profiles`
 - `kernel.required_profiles`
 - `arch.supported_images`
+- `image.mirror_regions`
 - `profile.compatible_kernels`
 - `profile.compatible_arches`
 
@@ -650,6 +670,7 @@ Phase 1 touchpoints are intentionally narrow:
 Error handling is stage-scoped and resumable.
 
 - manifest validation fails early for unknown kernel versions, unsupported arch/profile combinations, and unsupported compatibility arguments
+- manifest validation fails early for invalid mirror overrides and ambiguous compatibility defaults
 - each stage records start, end, input fingerprint, output paths, and failure reason in `state/`
 - successful stage outputs are not destroyed automatically on downstream failure
 - in Phase 1, reruns are keyed only by request fingerprint and overwrite prior state for that same fingerprint
@@ -658,6 +679,8 @@ Error handling is stage-scoped and resumable.
 Phase 1 failure classification:
 
 - manifest syntax, unknown arguments, and unsupported kernel/arch/profile combinations are `validation` errors before stage execution
+- invalid or unsupported `mirror_region` values are `validation` errors before stage execution
+- zero or multiple `default_compat` manifests in a family are `validation` errors before stage execution
 - `validate` is purely static and performs no host checks
 - Phase 1 `prepare` checks only local prerequisites needed to emit state, such as writable build paths and a usable Python runtime
 - Phase 1 does not probe network reachability, mirror health, cross-compilers, debootstrap, or QEMU availability
