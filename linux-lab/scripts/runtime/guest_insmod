@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 MODULE" >&2
+    exit 1
+fi
+
+MODULE=$1
+RMMODS_CMD=${LINUX_LAB_GUEST_RMMODS_CMD:-scripts/rmmods}
+DMESG_CMD=${LINUX_LAB_GUEST_DMESG_CMD:-sudo dmesg -c}
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+printf -v REMOTE_CMD '%s; sudo insmod %q; %s' "$RMMODS_CMD" "$MODULE" "$DMESG_CMD"
+exec "$SCRIPT_DIR/connect" "bash" "-lc" "$REMOTE_CMD"

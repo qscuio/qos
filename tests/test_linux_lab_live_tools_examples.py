@@ -78,6 +78,26 @@ def _write_tool_manifest_with_build_workdir(root: Path, key: str, repo_url: str,
     )
 
 
+def _write_example_catalog_entry(root: Path, key: str, kind: str, category: str, source: str, build_mode: str) -> None:
+    catalog_root = root / "catalog" / "examples"
+    catalog_root.mkdir(parents=True, exist_ok=True)
+    (catalog_root / f"{key}.yaml").write_text(
+        "\n".join(
+            [
+                f'key: "{key}"',
+                f'kind: "{kind}"',
+                f'category: "{category}"',
+                f'source: "{source}"',
+                f'origin: "../qulk/modules/{key}"',
+                f'build_mode: "{build_mode}"',
+                "enabled: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def _make_request(tmp_path: Path) -> object:
     return SimpleNamespace(
         kernel_version="fixture",
@@ -197,6 +217,54 @@ def test_build_examples_stage_executes_local_example_plan(tmp_path: Path, monkey
     (rust_root / "rust_chardev.rs").write_text("// rust chardev\n", encoding="utf-8")
     for filename in ("hello.c", "packet_filter.c", "tracing.c", "xdp.c", "open.c"):
         (bpf_dir / filename).write_text("int prog(void) { return 0; }\n", encoding="utf-8")
+    _write_example_catalog_entry(
+        labroot,
+        "modules-debug",
+        "module",
+        "debug",
+        "linux-lab/examples/modules/debug",
+        "kbuild-module",
+    )
+    _write_example_catalog_entry(
+        labroot,
+        "simple",
+        "module",
+        "core",
+        "linux-lab/examples/modules/simple",
+        "kbuild-module",
+    )
+    _write_example_catalog_entry(
+        labroot,
+        "ioctl",
+        "module",
+        "io",
+        "linux-lab/examples/modules/ioctl",
+        "kbuild-module",
+    )
+    _write_example_catalog_entry(
+        labroot,
+        "userspace-app",
+        "userspace",
+        "io",
+        "linux-lab/examples/userspace/app",
+        "gcc-userspace",
+    )
+    _write_example_catalog_entry(
+        labroot,
+        "rust_learn",
+        "rust",
+        "core",
+        "linux-lab/examples/rust/rust_learn",
+        "rust-user",
+    )
+    _write_example_catalog_entry(
+        labroot,
+        "bpf-learn",
+        "bpf",
+        "network",
+        "linux-lab/examples/bpf/learn",
+        "bpf-clang",
+    )
 
     monkeypatch.setenv("LINUX_LAB_ROOT_OVERRIDE", str(labroot))
 

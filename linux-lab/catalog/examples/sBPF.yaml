@@ -1,0 +1,13 @@
+key: sBPF
+kind: bpf
+category: experimental
+source: linux-lab/examples/bpf/experimental/sBPF
+origin: ../qulk/modules/sBPF
+build_mode: custom-make
+runtime_helpers: []
+tags:
+- bpf
+- experimental
+- sBPF
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

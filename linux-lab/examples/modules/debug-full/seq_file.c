@@ -1,0 +1,111 @@
+#include <linux/debugfs.h>
+#include <linux/errno.h> /* EFAULT */
+#include <linux/fs.h>
+#include <linux/module.h>
+#include <linux/printk.h> /* pr_info */
+#include <linux/seq_file.h> /* seq_read, seq_lseek, single_release */
+#include <linux/slab.h> /* kmalloc, kfree */
+#include <linux/uaccess.h> /* copy_from_user, copy_to_user */
+#include <uapi/linux/stat.h> /* S_IRUSR */
+
+static int max = 2;
+module_param(max, int, S_IRUSR | S_IWUSR);
+
+static struct dentry *debugfs_file;
+
+/* Called at the beginning of every read.
+ *
+ * The return value is passsed to the first show.
+ * It normally represents the current position of the iterator.
+ * It could be any struct, but we use just a single integer here.
+ *
+ * NULL return means stop should be called next, and so the read will be empty..
+ * This happens for example for an ftell that goes beyond the file size.
+ */
+static void *start(struct seq_file *s, loff_t *pos)
+{
+	loff_t *spos;
+
+	pr_info("start pos = %llx\n", (unsigned long long)*pos);
+ 	spos = kmalloc(sizeof(loff_t), GFP_KERNEL);
+	if (!spos || *pos >= max)
+		return NULL;
+	*spos = *pos;
+	return spos;
+}
+
+/* The return value is passed to next show.
+ * If NULL, stop is called next instead of show, and read ends.
+ *
+ * Can get called multiple times, until enough data is returned for the read.
+ */
+static void *next(struct seq_file *s, void *v, loff_t *pos)
+{
+	loff_t *spos;
+
+	spos = v;
+	pr_info("next pos = %llx\n", (unsigned long long)*pos);
+	if (*pos >= max)
+		return NULL;
+	*pos = ++*spos;
+	return spos;
+}
+
+/* Called at the end of every read. */
+static void stop(struct seq_file *s, void *v)
+{
+	pr_info("stop\n");
+	kfree(v);
+}
+
+/* Return 0 means success, SEQ_SKIP ignores previous prints, negative for error. */
+static int show(struct seq_file *s, void *v)
+{
+	loff_t *spos;
+
+	spos = v;
+	pr_info("show pos = %llx\n", (unsigned long long)*spos);
+	seq_printf(s, "%llx\n", (long long unsigned)*spos);
+	return 0;
+}
+
+static struct seq_operations my_seq_ops = {
+	.next  = next,
+	.show  = show,
+	.start = start,
+	.stop  = stop,
+};
+
+static int open(struct inode *inode, struct file *file)
+{
+	pr_info("open\n");
+	return seq_open(file, &my_seq_ops);
+}
+
+static struct file_operations fops = {
+	.owner   = THIS_MODULE,
+	.llseek  = seq_lseek,
+	.open    = open,
+	.read    = seq_read,
+	.release = seq_release
+};
+
+static int seq_m_init(void)
+{
+	debugfs_file = debugfs_create_file(
+		"m_seq_file", S_IRUSR, NULL, NULL, &fops);
+	if (debugfs_file) {
+		return 0;
+	} else {
+		return -EINVAL;
+	}
+}
+
+static void seq_m_exit(void)
+{
+	debugfs_remove(debugfs_file);
+}
+
+module_init(seq_m_init)
+module_exit(seq_m_exit)
+MODULE_LICENSE("GPL");

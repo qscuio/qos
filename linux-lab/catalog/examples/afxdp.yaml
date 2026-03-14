@@ -1,0 +1,13 @@
+key: afxdp
+kind: bpf
+category: network
+source: linux-lab/examples/bpf/network/afxdp
+origin: ../qulk/modules/afxdp
+build_mode: custom-make
+runtime_helpers: []
+tags:
+- bpf
+- network
+- afxdp
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

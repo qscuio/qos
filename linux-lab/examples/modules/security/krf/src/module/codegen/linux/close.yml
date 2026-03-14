@@ -1,0 +1,16 @@
+proto: unsigned int fd
+parms: fd
+errors:
+  - EBADF
+unlikely_errors:
+  # - EAGAIN
+  # - EWOULDBLOCK
+  - EBADF
+  - EINTR
+  - EIO
+  - ENOSPC
+  - EDQUOT
+  # - EISDIR
+profiles:
+  - fs
+  - io

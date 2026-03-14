@@ -4,6 +4,7 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -12,10 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 BIN_LINUX_LAB = ROOT / "linux-lab" / "bin" / "linux-lab"
 REQUESTS_ROOT = ROOT / "build" / "linux-lab" / "requests"
 MODULE_PATH = ROOT / "linux-lab" / "orchestrator" / "core" / "examples.py"
+CATALOG_MODULE_PATH = ROOT / "linux-lab" / "orchestrator" / "core" / "example_catalog.py"
+LINUX_LAB_ROOT = ROOT / "linux-lab"
 
 
 def _load_module(name: str, path: Path) -> ModuleType:
     assert path.is_file(), f"missing module file: {path}"
+    if str(LINUX_LAB_ROOT) not in sys.path:
+        sys.path.insert(0, str(LINUX_LAB_ROOT))
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -51,6 +56,18 @@ def test_curated_examples_are_ported() -> None:
     assert missing == [], f"missing curated examples: {missing}"
 
 
+def test_curated_examples_are_enabled_in_catalog() -> None:
+    module = _load_module("linux_lab_example_catalog_assets", CATALOG_MODULE_PATH)
+    catalog = module.load_example_catalog(ROOT / "linux-lab" / "catalog" / "examples")
+
+    assert catalog["modules-debug"]["enabled"] is True
+    assert catalog["simple"]["enabled"] is True
+    assert catalog["ioctl"]["enabled"] is True
+    assert catalog["userspace-app"]["enabled"] is True
+    assert catalog["rust_learn"]["enabled"] is True
+    assert catalog["bpf-learn"]["enabled"] is True
+
+
 def test_example_helper_resolves_build_commands() -> None:
     module = _load_module("linux_lab_examples", MODULE_PATH)
     plan = module.resolve_example_plan(
@@ -61,6 +78,10 @@ def test_example_helper_resolves_build_commands() -> None:
 
     groups = [item["group"] for item in plan]
     assert groups == ["modules-core", "userspace-core", "rust-core", "bpf-core"]
+    assert [entry["key"] for entry in plan[0]["entries"]] == ["modules-debug", "simple", "ioctl"]
+    assert [entry["key"] for entry in plan[1]["entries"]] == ["userspace-app"]
+    assert [entry["key"] for entry in plan[2]["entries"]] == ["rust_learn"]
+    assert [entry["key"] for entry in plan[3]["entries"]] == ["bpf-learn"]
     assert plan[0]["commands"][0][0:2] == ["make", "-C"]
     assert plan[1]["commands"][0][0] == "gcc"
     assert plan[2]["commands"][0][0:2] == ["make", "-C"]

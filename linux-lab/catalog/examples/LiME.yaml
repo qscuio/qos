@@ -1,0 +1,15 @@
+key: LiME
+kind: module
+category: memory
+source: linux-lab/examples/modules/memory/LiME
+origin: ../qulk/modules/LiME
+build_mode: custom-make
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- memory
+- LiME
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

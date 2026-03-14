@@ -1,0 +1,15 @@
+key: kernel-hook-framework
+kind: module
+category: security
+source: linux-lab/examples/modules/security/kernel-hook-framework
+origin: ../qulk/modules/kernel-hook-framework
+build_mode: custom-make
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- security
+- kernel-hook-framework
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

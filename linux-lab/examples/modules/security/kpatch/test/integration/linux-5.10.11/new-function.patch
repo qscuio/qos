@@ -1,0 +1,27 @@
+diff --git a/drivers/tty/n_tty.c b/drivers/tty/n_tty.c
+index c2869489ba68..7a46fc7a88f1 100644
+--- a/drivers/tty/n_tty.c
++++ b/drivers/tty/n_tty.c
+@@ -2295,7 +2295,7 @@ static ssize_t n_tty_read(struct tty_struct *tty, struct file *file,
+  *		  lock themselves)
+  */
+ 
+-static ssize_t n_tty_write(struct tty_struct *tty, struct file *file,
++static ssize_t noinline kpatch_n_tty_write(struct tty_struct *tty, struct file *file,
+ 			   const unsigned char *buf, size_t nr)
+ {
+ 	const unsigned char *b = buf;
+@@ -2382,6 +2382,13 @@ static ssize_t n_tty_write(struct tty_struct *tty, struct file *file,
+ 	return (b - buf) ? b - buf : retval;
+ }
+ 
++__attribute__((optimize("-fno-optimize-sibling-calls")))
++static ssize_t n_tty_write(struct tty_struct *tty, struct file *file,
++			   const unsigned char *buf, size_t nr)
++{
++	return kpatch_n_tty_write(tty, file, buf, nr);
++}
++
+ /**
+  *	n_tty_poll		-	poll method for N_TTY
+  *	@tty: terminal device

@@ -1,0 +1,9 @@
+proto: unsigned int fd, struct __old_kernel_stat __user *statbuf
+parms: fd, statbuf
+errors:
+  - EBADF
+  - EFAULT
+  - ENOMEM
+  - EOVERFLOW
+profiles:
+  - fs

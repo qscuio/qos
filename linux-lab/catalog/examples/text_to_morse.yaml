@@ -1,0 +1,15 @@
+key: text_to_morse
+kind: module
+category: security
+source: linux-lab/examples/modules/security/text_to_morse
+origin: ../qulk/modules/text_to_morse
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- security
+- text_to_morse
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HOST=${LINUX_LAB_MONITOR_HOST:-localhost}
+PORT=${LINUX_LAB_MONITOR_PORT:-12345}
+TELNET_BIN=${LINUX_LAB_TELNET_BIN:-telnet}
+
+exec "$TELNET_BIN" "$HOST" "$PORT"

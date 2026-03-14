@@ -1,0 +1,11 @@
+proto: int family, int type, int protocol, int __user *usockvec
+parms: family, type, protocol, usockvec
+errors:
+  - EAFNOSUPPORT
+  - EFAULT
+  - EMFILE
+  - ENFILE
+  - EOPNOTSUPP
+  - EPROTONOSUPPORT
+profiles:
+  - net

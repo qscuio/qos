@@ -1,0 +1,15 @@
+key: mmio
+kind: module
+category: memory
+source: linux-lab/examples/modules/memory/mmio
+origin: ../qulk/modules/mmio
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- memory
+- mmio
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

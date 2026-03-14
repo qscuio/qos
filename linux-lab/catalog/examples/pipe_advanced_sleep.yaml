@@ -1,0 +1,15 @@
+key: pipe_advanced_sleep
+kind: module
+category: io
+source: linux-lab/examples/modules/io/pipe_advanced_sleep
+origin: ../qulk/modules/pipe_advanced_sleep
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- io
+- pipe_advanced_sleep
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

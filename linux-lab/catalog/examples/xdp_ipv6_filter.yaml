@@ -1,0 +1,13 @@
+key: xdp_ipv6_filter
+kind: bpf
+category: network
+source: linux-lab/examples/bpf/network/xdp_ipv6_filter
+origin: ../qulk/modules/xdp_ipv6_filter
+build_mode: custom-make
+runtime_helpers: []
+tags:
+- bpf
+- network
+- xdp_ipv6_filter
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

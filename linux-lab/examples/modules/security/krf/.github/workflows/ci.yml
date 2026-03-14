@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install dependencies
+        run: sudo apt install -y cppcheck clang-format
+      - name: Lint
+        run: |
+          make CLANG_FORMAT=clang-format fmt && git diff --exit-code
+          cppcheck --error-exitcode=1 src/
+  build:
+    strategy:
+      matrix:
+        platform: ["ubuntu-18.04", "ubuntu-20.04"]
+        env:
+          - FAULTS: conservative
+          - FAULTS:
+    runs-on: ${{ matrix.platform }}
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/setup-ruby@v1
+      with:
+        ruby-version: "2.7"
+    - name: Install dependencies
+      run: sudo apt install -y ruby build-essential linux-headers-$(uname -r)
+    - name: Build
+      env:
+        FAULTS: ${{ matrix.env.FAULTS }}
+      run: make

@@ -1,0 +1,15 @@
+key: hw_breakpoint
+kind: module
+category: experimental
+source: linux-lab/examples/modules/experimental/hw_breakpoint
+origin: ../qulk/modules/hw_breakpoint
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- experimental
+- hw_breakpoint
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

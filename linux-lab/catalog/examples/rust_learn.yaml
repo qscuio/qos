@@ -1,0 +1,11 @@
+key: "rust_learn"
+kind: "rust"
+category: "core"
+source: "linux-lab/examples/rust/rust_learn"
+origin: "../qulk/modules/rust_learn"
+build_mode: "rust-user"
+tags:
+  - "rust"
+  - "kernel"
+enabled: true
+notes: "Imported Rust learning module and user helper pair."

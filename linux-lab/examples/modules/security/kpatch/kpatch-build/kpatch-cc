@@ -1,0 +1,92 @@
+#!/bin/bash
+
+if [[ ${KPATCH_GCC_DEBUG:-0} -ne 0 ]]; then
+	set -o xtrace
+fi
+
+TOOLCHAINCMD="$1"
+shift
+
+if [[ -z "$KPATCH_GCC_TEMPDIR" ]]; then
+	exec "$TOOLCHAINCMD" "$@"
+fi
+
+declare -a args=("$@")
+
+if [[ "$TOOLCHAINCMD" =~ ^(.*-)?gcc$ || "$TOOLCHAINCMD" =~ ^(.*-)?clang$ ]] ; then
+	while [ "$#" -gt 0 ]; do
+		if [ "$1" = "-o" ]; then
+			obj="$2"
+
+			# skip copying the temporary .o files created by
+			# recordmcount.pl
+			[[ "$obj" = */.tmp_mc_*.o ]] && break;
+
+			[[ "$obj" = */.tmp_*.o ]] && obj="${obj/.tmp_/}"
+			relobj=${obj##"$KPATCH_GCC_SRCDIR"/}
+			case "$relobj" in
+				*.mod.o|\
+				*built-in.o|\
+				*built-in.a|\
+				vmlinux.o|\
+				.tmp_kallsyms1.o|\
+				.tmp_kallsyms2.o|\
+				arch/x86/boot/*|\
+				arch/x86/entry/vdso/*|\
+				arch/x86/purgatory/*|\
+				arch/x86/realmode/*|\
+				arch/x86/tools/*|\
+				arch/x86/vdso/*|\
+				arch/powerpc/kernel/prom_init.o|\
+				arch/powerpc/kernel/vdso64/*|\
+				arch/s390/boot/*|\
+				arch/s390/purgatory/*|\
+				arch/s390/kernel/vdso64/*|\
+				drivers/firmware/efi/libstub/*|\
+				init/version.o|\
+				init/version-timestamp.o|\
+				kernel/system_certificates.o|\
+				lib/*|\
+				tools/*|\
+				.*.o|\
+				*/.lib_exports.o)
+					break
+					;;
+				*.o)
+					mkdir -p "$KPATCH_GCC_TEMPDIR/orig/$(dirname "$relobj")"
+					[[ -e "$obj" ]] && cp -f "$obj" "$KPATCH_GCC_TEMPDIR/orig/$relobj"
+					echo "$relobj" >> "$KPATCH_GCC_TEMPDIR/changed_objs"
+					break
+					;;
+				*)
+					break
+					;;
+			esac
+		fi
+		shift
+	done
+elif [[ "$TOOLCHAINCMD" =~ ^(.*-)?ld || "$TOOLCHAINCMD" =~ ^(.*-)?ld.lld ]] ; then
+	while [ "$#" -gt 0 ]; do
+		if [ "$1" = "-o" ]; then
+			obj="$2"
+			relobj=${obj//$KPATCH_GCC_SRCDIR\//}
+			case "$obj" in
+				*.ko)
+					mkdir -p "$KPATCH_GCC_TEMPDIR/module/$(dirname "$relobj")"
+					cp -f "$obj" "$KPATCH_GCC_TEMPDIR/module/$relobj"
+					break
+					;;
+				.tmp_vmlinux*|vmlinux)
+					args+=(--warn-unresolved-symbols)
+					break
+					;;
+				*)
+					break
+					;;
+			esac
+		fi
+		shift
+	done
+fi
+
+exec "$TOOLCHAINCMD" "${args[@]}"

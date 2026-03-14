@@ -1,0 +1,7 @@
+proto: unsigned int fd
+parms: fd
+errors:
+  - EACCES
+  - EBADF
+profiles:
+  - fs

@@ -1,0 +1,14 @@
+key: "modules-debug"
+kind: "module"
+category: "debug"
+source: "linux-lab/examples/modules/debug"
+origin: "../qulk/modules/debug"
+build_mode: "kbuild-module"
+runtime_helpers:
+  - "guest_insmod"
+  - "guest_rmmods"
+tags:
+  - "module"
+  - "debug"
+enabled: true
+notes: "Curated debug-oriented module subset imported during the initial linux-lab runtime parity work."

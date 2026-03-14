@@ -1,0 +1,15 @@
+key: async_io
+kind: module
+category: concurrency
+source: linux-lab/examples/modules/concurrency/async_io
+origin: ../qulk/modules/async_io
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- concurrency
+- async_io
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

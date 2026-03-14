@@ -1,0 +1,15 @@
+key: proc_fs_iterator
+kind: module
+category: io
+source: linux-lab/examples/modules/io/proc_fs_iterator
+origin: ../qulk/modules/proc_fs_iterator
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- io
+- proc_fs_iterator
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

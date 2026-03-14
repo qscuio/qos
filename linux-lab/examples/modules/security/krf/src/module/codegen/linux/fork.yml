@@ -1,0 +1,8 @@
+proto: void
+errors:
+  - EAGAIN
+  - ENOMEM
+  - ENOSYS
+  - ERESTARTNOINTR
+profiles:
+  - proc

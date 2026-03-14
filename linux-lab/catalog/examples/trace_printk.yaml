@@ -1,0 +1,15 @@
+key: trace_printk
+kind: module
+category: tracing
+source: linux-lab/examples/modules/tracing/trace_printk
+origin: ../qulk/modules/trace_printk
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- tracing
+- trace_printk
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

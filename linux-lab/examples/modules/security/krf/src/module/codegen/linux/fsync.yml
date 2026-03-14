@@ -1,0 +1,13 @@
+proto: unsigned int fd
+parms: fd
+errors:
+  - EBADF
+  - EIO
+  - ENOSPC
+  - EROFS
+  - EINVAL
+  - ENOSPC
+  - EDQUOT
+profiles:
+  - fs
+  - io

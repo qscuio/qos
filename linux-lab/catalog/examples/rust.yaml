@@ -1,0 +1,13 @@
+key: rust
+kind: rust
+category: core
+source: linux-lab/examples/rust/core/rust
+origin: ../qulk/modules/rust
+build_mode: custom-make
+runtime_helpers: []
+tags:
+- rust
+- core
+- rust
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

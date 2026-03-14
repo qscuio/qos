@@ -1,0 +1,15 @@
+key: workqueue_demo
+kind: module
+category: drivers
+source: linux-lab/examples/modules/drivers/workqueue_demo
+origin: ../qulk/modules/workqueue_demo
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- drivers
+- workqueue_demo
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

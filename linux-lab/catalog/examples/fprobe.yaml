@@ -1,0 +1,15 @@
+key: fprobe
+kind: module
+category: tracing
+source: linux-lab/examples/modules/tracing/fprobe
+origin: ../qulk/modules/fprobe
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- tracing
+- fprobe
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

@@ -1,0 +1,15 @@
+key: trace_toolkit
+kind: module
+category: tracing
+source: linux-lab/examples/modules/tracing/trace_toolkit
+origin: ../qulk/modules/trace_toolkit
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- tracing
+- trace_toolkit
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

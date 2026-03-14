@@ -1,0 +1,12 @@
+key: "userspace-app"
+kind: "userspace"
+category: "io"
+source: "linux-lab/examples/userspace/app"
+origin: "../qulk/modules/debug"
+build_mode: "gcc-userspace"
+tags:
+  - "userspace"
+  - "poll"
+  - "netlink"
+enabled: true
+notes: "Curated userspace helper programs aligned with the imported module subset."

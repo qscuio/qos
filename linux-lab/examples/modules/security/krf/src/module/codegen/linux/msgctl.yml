@@ -1,0 +1,10 @@
+proto: int msqid, int cmd, struct msqid_ds __user *buf
+parms: msqid, cmd, buf
+errors:
+  - EACCES
+  - EFAULT
+  - EIDRM
+  - EINVAL
+  - EPERM
+profiles:
+  - ipc

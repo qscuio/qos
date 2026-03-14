@@ -1,0 +1,15 @@
+key: msi_interrupt
+kind: module
+category: drivers
+source: linux-lab/examples/modules/drivers/msi_interrupt
+origin: ../qulk/modules/msi_interrupt
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- drivers
+- msi_interrupt
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

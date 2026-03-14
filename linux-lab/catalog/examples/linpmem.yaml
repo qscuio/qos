@@ -1,0 +1,15 @@
+key: linpmem
+kind: module
+category: memory
+source: linux-lab/examples/modules/memory/linpmem
+origin: ../qulk/modules/linpmem
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- memory
+- linpmem
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

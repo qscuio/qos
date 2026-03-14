@@ -1,0 +1,1 @@
+obj-m := workqueue_demo.o percpu_demo.o rcu_demo.o memory_demo.o wakeup_demo.o

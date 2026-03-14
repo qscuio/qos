@@ -1,0 +1,15 @@
+key: simplefs
+kind: module
+category: filesystem
+source: linux-lab/examples/modules/filesystem/simplefs
+origin: ../qulk/modules/simplefs
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- filesystem
+- simplefs
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

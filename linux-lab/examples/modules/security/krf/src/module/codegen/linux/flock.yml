@@ -1,0 +1,10 @@
+proto: unsigned int fd, unsigned int cmd
+parms: fd, cmd
+errors:
+  - EBADF
+  - EINTR
+  - EINVAL
+  - ENOLCK
+  - EWOULDBLOCK
+profiles:
+  - fs

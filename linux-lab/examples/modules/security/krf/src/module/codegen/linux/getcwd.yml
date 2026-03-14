@@ -1,0 +1,12 @@
+proto: char __user *buf, unsigned long size
+parms: buf, size
+errors:
+  - EACCES
+  - EFAULT
+  - EINVAL
+  - ENAMETOOLONG
+  - ENOENT
+  - ENOMEM
+  - ERANGE
+profiles:
+  - fs

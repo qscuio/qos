@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HOST=${LINUX_LAB_QMP_HOST:-localhost}
+PORT=${LINUX_LAB_QMP_PORT:-23456}
+NC_BIN=${LINUX_LAB_NC_BIN:-nc}
+
+{
+    printf '%s\n' '{"execute":"qmp_capabilities"}'
+    if [ "$#" -eq 0 ]; then
+        printf '%s\n' '{"execute":"query-commands"}'
+    else
+        for command in "$@"; do
+            printf '%s\n' "$command"
+        done
+    fi
+} | "$NC_BIN" "$HOST" "$PORT"

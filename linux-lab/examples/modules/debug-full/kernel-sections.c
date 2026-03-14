@@ -1,0 +1,86 @@
+#include "lookup_symbol.h"
+#include <linux/module.h>
+#include <linux/proc_fs.h>
+#include <linux/kallsyms.h>
+#include <linux/seq_file.h>
+#include <linux/version.h>
+#if LINUX_VERSION_CODE > KERNEL_VERSION(4, 11, 0)
+#include <linux/uaccess.h>
+#else
+#include <asm/uaccess.h>
+#endif
+
+/*
+ * TODO:
+ *  * Add other sections
+ */
+typedef u64 virt_addr_t;
+
+static struct proc_dir_entry *kernel_symbols_info;
+
+static int kern_syms_proc_show(struct seq_file *m, void *v)
+{
+	phys_addr_t __text = (phys_addr_t)__pa_symbol(lookup_name("_text"));
+	virt_addr_t __text_v = (virt_addr_t)lookup_name("_text");
+	phys_addr_t __etext = (phys_addr_t)__pa_symbol(lookup_name("_etext"));
+	phys_addr_t __bss_start = (phys_addr_t)__pa_symbol(lookup_name("__bss_start"));
+	virt_addr_t __bss_start_v = (virt_addr_t)lookup_name("__bss_start");
+	phys_addr_t __bss_stop = (phys_addr_t)__pa_symbol(lookup_name("__bss_stop"));
+
+	seq_printf(m, "                     \t\tStart                  End\t\t\tSize\n\n");
+	seq_printf(m, "_text physical addr: \t\t[%#llx]            [%llu]\t\t[%llu bytes]\n", __text, __text, __etext - __text);
+	seq_printf(m, "_text virtual  addr: \t\t[%#llx]   [%llu]\n", __text_v, __text_v);
+
+	seq_printf(m, "\n");
+
+	seq_printf(m, "__bss physical addr: \t\t[%#llx]            [%llu]\t\t[%llu bytes]\n", __bss_start, __bss_start, __bss_stop - __bss_start);
+	seq_printf(m, "__bss virtual  addr: \t\t[%#llx]   [%llu]\n", __bss_start_v, __bss_start_v);
+
+	return 0;
+}
+
+static int kern_syms_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, kern_syms_proc_show, NULL);
+}
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 6, 0)
+static const struct file_operations kern_syms_fops = {
+	.open		= kern_syms_open,
+	.read		= seq_read,
+	.llseek         = seq_lseek,
+	.release	= single_release,
+};
+#else
+static const struct proc_ops kern_syms_fops = {
+	.proc_open		= kern_syms_open,
+	.proc_read		= seq_read,
+	.proc_lseek         = seq_lseek,
+	.proc_release	= single_release,
+};
+#endif
+
+static int __init kernel_sections_mod_init(void)
+{
+	kernel_symbols_info = proc_create("kernel-sections", 0, NULL, &kern_syms_fops);
+
+	if (!kernel_symbols_info)
+	{
+		pr_info("Error creating /proc/kernel-sections directory");
+		return -ENOMEM;
+	}
+
+        return 0;
+}
+
+static void __exit kernel_sections_mod_cleanup(void)
+{
+	remove_proc_entry("kernel-sections", NULL);
+}
+
+module_init(kernel_sections_mod_init);
+module_exit(kernel_sections_mod_cleanup);
+
+MODULE_LICENSE("GPL v2");
+MODULE_AUTHOR("Alexander Kuleshov <kuleshovmail@gmail.com>");
+MODULE_DESCRIPTION("Expose page tables to the /proc.");

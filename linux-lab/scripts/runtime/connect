@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HOST=${LINUX_LAB_GUEST_HOST:-10.10.10.1}
+USER=${LINUX_LAB_GUEST_USER:-qwert}
+KEY=${LINUX_LAB_SSH_KEY:-}
+SSH_BIN=${LINUX_LAB_SSH_BIN:-ssh}
+STRICT=${LINUX_LAB_STRICT_HOST_KEY_CHECKING:-no}
+
+SSH_ARGS=()
+if [ -n "$KEY" ]; then
+    SSH_ARGS+=(-i "$KEY")
+fi
+SSH_ARGS+=("${USER}@${HOST}" -o "StrictHostKeyChecking=${STRICT}")
+
+exec "$SSH_BIN" "${SSH_ARGS[@]}" "$@"

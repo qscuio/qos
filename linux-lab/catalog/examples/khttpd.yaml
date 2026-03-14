@@ -1,0 +1,15 @@
+key: khttpd
+kind: module
+category: core
+source: linux-lab/examples/modules/core/khttpd
+origin: ../qulk/modules/khttpd
+build_mode: kbuild-module
+runtime_helpers:
+- guest_insmod
+- guest_rmmods
+tags:
+- module
+- core
+- khttpd
+enabled: false
+notes: Imported breadth-first from qulk; not yet enabled in the default build flow.
