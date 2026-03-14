@@ -9,5 +9,7 @@ tags:
 - bpf
 - network
 - afxdp
+groups:
+- bpf-all
 enabled: false
 notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

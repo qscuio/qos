@@ -1,14 +1,17 @@
-key: "simple"
-kind: "module"
-category: "core"
-source: "linux-lab/examples/modules/simple"
-origin: "../qulk/modules/simple"
-build_mode: "kbuild-module"
+key: simple
+kind: module
+category: core
+source: linux-lab/examples/modules/simple
+origin: ../qulk/modules/simple
+build_mode: kbuild-module
 runtime_helpers:
-  - "guest_insmod"
-  - "guest_rmmods"
+- guest_insmod
+- guest_rmmods
 tags:
-  - "module"
-  - "core"
+- module
+- core
+groups:
+- modules-core
+- modules-all
 enabled: true
-notes: "Basic sample module."
+notes: Basic sample module.

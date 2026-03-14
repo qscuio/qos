@@ -3,11 +3,13 @@ kind: rust
 category: core
 source: linux-lab/examples/rust/core/rust
 origin: ../qulk/modules/rust
-build_mode: custom-make
+build_mode: kernel-tree-rust
 runtime_helpers: []
 tags:
 - rust
 - core
 - rust
-enabled: false
+groups:
+- rust-all
+enabled: true
 notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

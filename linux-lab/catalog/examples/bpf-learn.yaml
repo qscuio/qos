@@ -1,12 +1,15 @@
-key: "bpf-learn"
-kind: "bpf"
-category: "network"
-source: "linux-lab/examples/bpf/learn"
-origin: "../qulk/modules/sBPF"
-build_mode: "bpf-clang"
+key: bpf-learn
+kind: bpf
+category: network
+source: linux-lab/examples/bpf/learn
+origin: ../qulk/modules/sBPF
+build_mode: bpf-clang
 tags:
-  - "bpf"
-  - "xdp"
-  - "tracing"
+- bpf
+- xdp
+- tracing
+groups:
+- bpf-core
+- bpf-all
 enabled: true
-notes: "Curated BPF learning subset kept buildable by the current lab flow."
+notes: Curated BPF learning subset kept buildable by the current lab flow.

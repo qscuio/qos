@@ -57,6 +57,23 @@ def test_manifest_defaults_and_schema_contract() -> None:
     assert request.artifact_root.name == request.request_fingerprint
 
 
+def test_full_samples_meta_profile_expands_to_broad_concrete_profiles() -> None:
+    manifests_mod = _load_module("linux_lab_manifests_full_samples", MANIFESTS_MODULE)
+    request_mod = _load_module("linux_lab_request_full_samples", REQUEST_MODULE)
+
+    manifests = manifests_mod.load_manifests(LINUX_LAB_ROOT / "manifests")
+    request = request_mod.resolve_native_request(
+        manifests=manifests,
+        kernel="6.18.4",
+        arch="x86_64",
+        image="noble",
+        profiles=["full-samples"],
+        mirror=None,
+    )
+
+    assert request.profiles == ["rust-all", "samples-all"]
+
+
 def test_validate_is_read_only() -> None:
     result = _run(
         [

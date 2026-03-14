@@ -117,6 +117,37 @@ def test_run_dry_run_emits_example_metadata() -> None:
     ]
 
 
+def test_full_samples_profile_emits_broad_example_metadata() -> None:
+    result = _run(
+        [
+            str(BIN_LINUX_LAB),
+            "run",
+            "--kernel",
+            "6.18.4",
+            "--arch",
+            "x86_64",
+            "--image",
+            "noble",
+            "--profile",
+            "full-samples",
+            "--dry-run",
+        ]
+    )
+    assert result.returncode == 0, result.stderr
+
+    request_root = _latest_request_root()
+    example_state = json.loads((request_root / "state" / "build-examples.json").read_text(encoding="utf-8"))
+    example_plans = example_state["metadata"]["example_plans"]
+    assert [item["group"] for item in example_plans] == [
+        "modules-all",
+        "userspace-all",
+        "rust-all",
+    ]
+    assert len(example_plans[0]["entries"]) > 3
+    assert any(entry["key"] == "hello" for entry in example_plans[0]["entries"])
+    assert any(entry["key"] == "rust" for entry in example_plans[2]["entries"])
+
+
 def test_minimal_profile_omits_optional_example_metadata() -> None:
     result = _run(
         [

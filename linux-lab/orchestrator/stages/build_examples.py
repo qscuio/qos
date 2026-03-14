@@ -20,11 +20,7 @@ def _linux_lab_root() -> Path:
 def _resolve_example_groups(manifests, request) -> list[str]:
     if "minimal" in request.profiles:
         return []
-    kernel = manifests.kernels[request.kernel_version]
     groups: list[str] = []
-    for group in kernel.example_groups:
-        if group not in groups:
-            groups.append(group)
     for profile_key in request.profiles:
         for group in manifests.profiles[profile_key].example_groups:
             if group not in groups:

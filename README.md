@@ -92,9 +92,9 @@ The current bootstrap provides:
 - ported kernel patch/config assets under `linux-lab/patches/`, `linux-lab/configs/`, and `linux-lab/fragments/`
 - release assets for `jammy` and `noble` under `linux-lab/images/releases/`
 - curated external tool manifests for `crash`, `cgdb`, `libbpf-bootstrap`, and `retsnoop`
-- curated learning examples for kernel modules, userspace apps, Rust kernel samples, and BPF samples under `linux-lab/examples/`
+- the full imported `../qulk/modules` sample corpus under `linux-lab/examples/`, with `67` catalog-enabled entries currently wired into `linux-lab`
 - live stage executors for source fetch, kernel patching, config composition, kernel build, tool/example build, image creation, and QEMU boot
-- runtime helper scripts under `linux-lab/scripts/` for image creation, QEMU boot, guest SSH, GDB attach, and tap bridge up/down hooks
+- runtime helper scripts under `linux-lab/scripts/` for image creation, QEMU boot, guest SSH, guest command/module helpers, monitor/QMP access, GDB attach, and tap bridge up/down hooks
 
 Native CLI examples:
 
@@ -119,9 +119,18 @@ linux-lab/bin/linux-lab run \
   --image noble \
   --profile default-lab \
   --dry-run
+
+linux-lab/bin/linux-lab run \
+  --kernel 6.18.4 \
+  --arch x86_64 \
+  --image noble \
+  --profile full-samples \
+  --dry-run
 ```
 
 Artifacts are written under `build/linux-lab/requests/` for `plan` and `run`.
+
+`default-lab` keeps the smaller curated workflow. `full-samples` expands to the broader safe sample set: all catalog-enabled out-of-tree kernel-module examples, the userspace app set, `rust_learn`, and the imported kernel-tree Rust sample sources. The remaining `custom-make` sample projects stay cataloged in place but disabled until they get dedicated build handling.
 
 Repo verification covers both the dry-run CLI path and stage-level live execution tests. The live tests use lightweight fixture archives, local git repos, `LINUX_LAB_IMAGE_MODE=mock`, and `LINUX_LAB_BOOT_MODE=print` so the runtime stages are exercised without forcing a full kernel build, debootstrap image install, or long-running QEMU boot during CI.
 

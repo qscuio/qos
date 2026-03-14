@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -8,10 +9,14 @@ from types import ModuleType
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "linux-lab" / "orchestrator" / "core" / "example_catalog.py"
 CATALOG_ROOT = ROOT / "linux-lab" / "catalog" / "examples"
+EXAMPLES_MODULE_PATH = ROOT / "linux-lab" / "orchestrator" / "core" / "examples.py"
 
 
 def _load_module(name: str, path: Path) -> ModuleType:
     assert path.is_file(), f"missing module file: {path}"
+    linux_lab_root = ROOT / "linux-lab"
+    if str(linux_lab_root) not in sys.path:
+        sys.path.insert(0, str(linux_lab_root))
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -92,3 +97,113 @@ def test_catalog_covers_all_qulk_module_roots() -> None:
     for item in catalog.values():
         source_path = ROOT / item["source"]
         assert source_path.exists(), f"catalog source path does not exist: {source_path}"
+
+
+def test_broad_enabled_sample_set_excludes_custom_make_entries() -> None:
+    module = _load_module("linux_lab_example_catalog_safe_bucket", MODULE_PATH)
+    catalog = module.load_example_catalog(CATALOG_ROOT)
+
+    enabled_custom = sorted(
+        item["key"]
+        for item in catalog.values()
+        if item["enabled"] and item["build_mode"] == "custom-make"
+    )
+
+    assert enabled_custom == []
+    assert catalog["rust"]["enabled"] is True
+    assert catalog["rust"]["build_mode"] == "kernel-tree-rust"
+
+
+def test_example_planner_picks_up_newly_enabled_catalog_entries(tmp_path: Path) -> None:
+    labroot = tmp_path / "labroot"
+    catalog_root = labroot / "catalog" / "examples"
+    catalog_root.mkdir(parents=True)
+    module_dir = labroot / "examples" / "modules" / "core" / "hello"
+    module_dir.mkdir(parents=True)
+    (catalog_root / "hello.yaml").write_text(
+        "\n".join(
+            [
+                'key: "hello"',
+                'kind: "module"',
+                'category: "core"',
+                'source: "linux-lab/examples/modules/core/hello"',
+                'origin: "../qulk/modules/hello"',
+                'build_mode: "kbuild-module"',
+                "enabled: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    module = _load_module("linux_lab_examples_catalog_enabled", EXAMPLES_MODULE_PATH)
+    plan = module.resolve_example_plan(
+        example_groups=["modules-core"],
+        linux_lab_root=labroot,
+        build_root=tmp_path / "build",
+    )
+
+    assert [entry["key"] for entry in plan[0]["entries"]] == ["hello"]
+
+
+def test_example_planner_respects_catalog_group_membership(tmp_path: Path) -> None:
+    labroot = tmp_path / "labroot"
+    catalog_root = labroot / "catalog" / "examples"
+    catalog_root.mkdir(parents=True)
+    for relative in (
+        "examples/modules/core/simple",
+        "examples/modules/core/hello",
+    ):
+        (labroot / relative).mkdir(parents=True)
+
+    (catalog_root / "simple.yaml").write_text(
+        "\n".join(
+            [
+                'key: "simple"',
+                'kind: "module"',
+                'category: "core"',
+                'source: "linux-lab/examples/modules/core/simple"',
+                'origin: "../qulk/modules/simple"',
+                'build_mode: "kbuild-module"',
+                "groups:",
+                '  - "modules-core"',
+                '  - "modules-all"',
+                "enabled: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (catalog_root / "hello.yaml").write_text(
+        "\n".join(
+            [
+                'key: "hello"',
+                'kind: "module"',
+                'category: "core"',
+                'source: "linux-lab/examples/modules/core/hello"',
+                'origin: "../qulk/modules/hello"',
+                'build_mode: "kbuild-module"',
+                "groups:",
+                '  - "modules-all"',
+                "enabled: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    module = _load_module("linux_lab_examples_catalog_groups", EXAMPLES_MODULE_PATH)
+
+    core_plan = module.resolve_example_plan(
+        example_groups=["modules-core"],
+        linux_lab_root=labroot,
+        build_root=tmp_path / "build",
+    )
+    full_plan = module.resolve_example_plan(
+        example_groups=["modules-all"],
+        linux_lab_root=labroot,
+        build_root=tmp_path / "build",
+    )
+
+    assert [entry["key"] for entry in core_plan[0]["entries"]] == ["simple"]
+    assert [entry["key"] for entry in full_plan[0]["entries"]] == ["simple", "hello"]

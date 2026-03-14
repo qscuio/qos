@@ -1,14 +1,17 @@
-key: "ioctl"
-kind: "module"
-category: "io"
-source: "linux-lab/examples/modules/ioctl"
-origin: "../qulk/modules/ioctl"
-build_mode: "kbuild-module"
+key: ioctl
+kind: module
+category: io
+source: linux-lab/examples/modules/ioctl
+origin: ../qulk/modules/ioctl
+build_mode: kbuild-module
 runtime_helpers:
-  - "guest_insmod"
-  - "guest_rmmods"
+- guest_insmod
+- guest_rmmods
 tags:
-  - "module"
-  - "ioctl"
+- module
+- ioctl
+groups:
+- modules-core
+- modules-all
 enabled: true
-notes: "Curated ioctl-oriented sample module."
+notes: Curated ioctl-oriented sample module.

@@ -11,5 +11,7 @@ tags:
 - module
 - core
 - linux_kernel_hacking
+groups:
+- modules-all
 enabled: false
 notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

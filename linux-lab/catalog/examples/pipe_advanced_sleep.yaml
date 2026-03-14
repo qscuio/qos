@@ -11,5 +11,7 @@ tags:
 - module
 - io
 - pipe_advanced_sleep
-enabled: false
+groups:
+- modules-all
+enabled: true
 notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

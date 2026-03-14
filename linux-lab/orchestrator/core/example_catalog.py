@@ -21,6 +21,7 @@ ALLOWED_BUILD_MODES = {
     "gcc-userspace",
     "rust-user",
     "bpf-clang",
+    "kernel-tree-rust",
     "custom-make",
     "disabled",
 }

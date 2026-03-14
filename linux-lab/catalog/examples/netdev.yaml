@@ -11,5 +11,7 @@ tags:
 - module
 - network
 - netdev
-enabled: false
+groups:
+- modules-all
+enabled: true
 notes: Imported breadth-first from qulk; not yet enabled in the default build flow.

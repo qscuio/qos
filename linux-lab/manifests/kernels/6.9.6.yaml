@@ -6,7 +6,9 @@ supported_profiles:
   - "debug"
   - "bpf"
   - "rust"
+  - "rust-all"
   - "samples"
+  - "samples-all"
   - "debug-tools"
   - "minimal"
 required_profiles: []

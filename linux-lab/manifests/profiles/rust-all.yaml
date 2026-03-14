@@ -1,0 +1,17 @@
+key: "rust-all"
+kind: "concrete"
+precedence: 30
+replaces: []
+expands_to: []
+fragment_ref: "linux-lab/fragments/rust.conf"
+compatible_kernels:
+  - "*"
+compatible_arches:
+  - "*"
+host_tools:
+  - "rustc"
+tool_groups:
+  - "rust-core"
+example_groups:
+  - "rust-all"
+post_build_refs: []

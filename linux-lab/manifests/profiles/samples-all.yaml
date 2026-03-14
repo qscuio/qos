@@ -1,0 +1,16 @@
+key: "samples-all"
+kind: "concrete"
+precedence: 40
+replaces: []
+expands_to: []
+fragment_ref: "linux-lab/fragments/samples.conf"
+compatible_kernels:
+  - "*"
+compatible_arches:
+  - "*"
+host_tools: []
+tool_groups: []
+example_groups:
+  - "modules-all"
+  - "userspace-all"
+post_build_refs: []
