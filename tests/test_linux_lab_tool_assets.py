@@ -178,6 +178,21 @@ def test_run_dry_run_emits_tool_metadata() -> None:
         }
     ]
 
+    external_tools = {item["key"]: item for item in metadata["external_tools"]}
+    assert external_tools["crash"]["build_policy"] == "host-build"
+    assert external_tools["cgdb"]["build_policy"] == "host-build"
+    assert external_tools["libbpf-bootstrap"]["build_policy"] == "guest-build"
+    assert external_tools["retsnoop"]["build_policy"] == "guest-build"
+    assert external_tools["crash"]["post_prepare_asset_copies"] == [
+        {
+            "from": str(ROOT / "linux-lab" / "tools" / "assets" / "crash" / "extensions"),
+            "to": "extensions/",
+        }
+    ]
+    assert external_tools["cgdb"]["post_prepare_asset_copies"] == []
+    assert external_tools["libbpf-bootstrap"]["post_prepare_asset_copies"] == []
+    assert external_tools["retsnoop"]["post_prepare_asset_copies"] == []
+
     for item in metadata["external_tools"]:
         for key in (
             "key",
