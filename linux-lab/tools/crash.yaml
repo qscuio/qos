@@ -1,0 +1,10 @@
+key: "crash"
+repo_url: "https://github.com/crash-utility/crash.git"
+checkout_dir: "build/linux-lab/tools/crash"
+prepare_commands:
+  - ["make", "configure"]
+  - ["make", "gdb_files"]
+  - ["make", "gdb_unzip"]
+build_commands:
+  - ["make"]
+  - ["make", "extensions"]

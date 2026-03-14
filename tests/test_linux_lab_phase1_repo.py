@@ -31,5 +31,7 @@ def test_linux_lab_make_targets_and_docs_exist() -> None:
 
     assert "linux-lab-validate:" in makefile
     assert "linux-lab-plan:" in makefile
+    assert "linux-lab-run:" in makefile
     assert "linux-lab" in readme
+    assert "--dry-run" in readme
     assert "build/linux-lab/" in ignore

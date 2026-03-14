@@ -1,0 +1,23 @@
+config SAMPLE_RUST_HELLO
+	tristate "Hello Rust learning module"
+	depends on RUST
+	help
+	  A simple hello world module for learning Rust kernel development.
+	  Demonstrates module! macro, parameters, KVec, and pr_info!.
+
+	  To compile this as a module, choose M here:
+	  the module will be called hello_rust.
+
+	  If unsure, say N.
+
+config SAMPLE_RUST_CHARDEV
+	tristate "Rust char device learning module"
+	depends on RUST
+	help
+	  A character device module for learning Rust kernel development.
+	  Demonstrates MiscDevice, ioctl, Mutex, and user-kernel data transfer.
+
+	  To compile this as a module, choose M here:
+	  the module will be called rust_chardev.
+
+	  If unsure, say N.

@@ -1,0 +1,8 @@
+key: "cgdb"
+repo_url: "https://github.com/cgdb/cgdb.git"
+checkout_dir: "build/linux-lab/tools/cgdb"
+prepare_commands:
+  - ["./autogen.sh"]
+  - ["./configure"]
+build_commands:
+  - ["make"]

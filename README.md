@@ -80,7 +80,7 @@ Linux1 test target:
 make test-linux1
 ```
 
-## Linux Lab Phase 2
+## Linux Lab Runtime Port
 
 `linux-lab/` is the bootstrap for the modern manifest-driven kernel lab port from `../qulk`.
 
@@ -90,7 +90,10 @@ The current bootstrap provides:
 - placeholder stage planning: `make linux-lab-plan`
 - compatibility shim entrypoint: `linux-lab/bin/ulk arch=x86_64 kernel=6.9.8 mirror=sg`
 - ported kernel patch/config assets under `linux-lab/patches/`, `linux-lab/configs/`, and `linux-lab/fragments/`
-- helper-aware planning metadata for source fetch, kernel patching, and config composition
+- release assets for `jammy` and `noble` under `linux-lab/images/releases/`
+- curated external tool manifests for `crash`, `cgdb`, `libbpf-bootstrap`, and `retsnoop`
+- curated learning examples for kernel modules, userspace apps, Rust kernel samples, and BPF samples under `linux-lab/examples/`
+- dry-run runtime metadata for source fetch, kernel patching, config composition, kernel build, tool/example build, image creation, and QEMU boot
 
 Native CLI examples:
 
@@ -108,9 +111,18 @@ linux-lab/bin/linux-lab plan \
   --profile debug \
   --profile rust \
   --mirror sg
+
+linux-lab/bin/linux-lab run \
+  --kernel 6.18.4 \
+  --arch x86_64 \
+  --image noble \
+  --profile default-lab \
+  --dry-run
 ```
 
-Artifacts are written under `build/linux-lab/requests/` only for `plan`.
+Artifacts are written under `build/linux-lab/requests/` for `plan` and `run`.
+
+Current `run` verification in this repo is dry-run based. It resolves and records the full kernel/image/tool/example/QEMU workflow without forcing every host dependency during tests.
 
 ## Manual QEMU Testing
 
