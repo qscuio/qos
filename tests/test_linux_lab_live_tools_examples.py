@@ -373,11 +373,14 @@ def test_build_tools_stage_executes_asset_copy_guest_skip_and_kernel_tools(tmp_p
     assert external_tools["retsnoop"]["build_policy"] == "guest-build"
     assert external_tools["retsnoop"]["guest_build_commands"] == [["make"]]
 
+    kernel_tree = request_root / "workspace" / "kernel" / "linux-fixture"
+    workspace_root = request_root / "workspace"
     marker_lines = marker_path.read_text(encoding="utf-8").splitlines()
     assert len(marker_lines) == 2
-    assert all(line.startswith(f"cwd={request_root / 'workspace'} args=") for line in marker_lines)
-    assert any("tools/libapi" in line for line in marker_lines)
-    assert any("subdir=tools all" in line for line in marker_lines)
+    libapi_line = next(line for line in marker_lines if "tools/libapi" in line)
+    kernel_tools_line = next(line for line in marker_lines if "subdir=tools all" in line)
+    assert libapi_line.startswith(f"cwd={kernel_tree} args=")
+    assert kernel_tools_line.startswith(f"cwd={workspace_root} args=")
 
     log_text = (request_root / "logs" / "build-tools.log").read_text(encoding="utf-8")
     assert log_text.index("$ sh -c printf crash-built > built.txt") < log_text.index("$ make O=")
@@ -475,6 +478,57 @@ def test_build_tools_stage_returns_failed_state_for_missing_kernel_workspace(tmp
     assert state["error_message"] == expected_message
     assert expected_message in (request_root / "logs" / "build-tools.log").read_text(encoding="utf-8")
     assert not marker_path.exists()
+
+
+def test_build_tools_stage_returns_failed_state_for_command_failure(tmp_path: Path, monkeypatch) -> None:
+    build_tools_mod = _load_module("linux_lab_build_tools_command_failed_live", BUILD_TOOLS_STAGE)
+    stages_mod = _load_module("linux_lab_core_stages_command_failed_live", STAGES_MODULE)
+
+    labroot = tmp_path / "labroot"
+    crash_repo = tmp_path / "repos" / "crash"
+    cgdb_repo = tmp_path / "repos" / "cgdb"
+    _git_init(crash_repo)
+    _git_init(cgdb_repo)
+    _write_custom_tool_manifest(
+        labroot,
+        key="crash",
+        repo_url=str(crash_repo),
+        prepare_commands=[["sh", "-c", "printf crash-prepared > prepared.txt"]],
+        build_commands=[["sh", "-c", "printf crash-built > built.txt"]],
+    )
+    _write_custom_tool_manifest(
+        labroot,
+        key="cgdb",
+        repo_url=str(cgdb_repo),
+        prepare_commands=[["sh", "-c", "printf cgdb-prepared > prepared.txt"]],
+        build_commands=[["sh", "-c", "printf failing >&2; exit 23"]],
+    )
+    monkeypatch.setenv("LINUX_LAB_ROOT_OVERRIDE", str(labroot))
+
+    request = _make_request(tmp_path)
+    request.profiles = ["debug-tools"]
+    manifests = SimpleNamespace(
+        kernels={"fixture": SimpleNamespace(tool_groups=[], example_groups=[])},
+        arches={"x86_64": SimpleNamespace(toolchain_prefix="")},
+        profiles={
+            "debug-tools": SimpleNamespace(
+                tool_groups=["debug-tools"],
+                host_tools=[],
+                example_groups=[],
+            )
+        },
+    )
+
+    stages_mod.execute_plan(request, manifests, [build_tools_mod.STAGE])
+
+    request_root = Path(request.artifact_root)
+    state = json.loads((request_root / "state" / "build-tools.json").read_text(encoding="utf-8"))
+    assert state["status"] == "failed"
+    assert state["error_kind"] == "command-failed"
+    assert state["error_message"] == "command failed with exit 23: sh -c printf failing >&2; exit 23"
+    log_text = (request_root / "logs" / "build-tools.log").read_text(encoding="utf-8")
+    assert "$ sh -c printf failing >&2; exit 23" in log_text
+    assert "failing" in log_text
 
 
 def test_build_examples_stage_executes_local_example_plan(tmp_path: Path, monkeypatch) -> None:

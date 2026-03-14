@@ -72,8 +72,11 @@ def _copy_post_prepare_assets(tool: dict, checkout_dir: Path) -> None:
             shutil.copy2(source, destination)
 
 
-def _kernel_workspace_root(request) -> Path:
-    return resolve_kernel_workspace_paths(request=request)["workspace_root"]
+def _kernel_tool_cwd(request, kernel_tool: dict) -> Path:
+    kernel_workspace = resolve_kernel_workspace_paths(request=request)
+    if kernel_tool["name"] == "tools/libapi":
+        return kernel_workspace["kernel_tree"]
+    return kernel_workspace["workspace_root"]
 
 
 def _validate_kernel_workspaces(request) -> None:
@@ -148,9 +151,12 @@ def _execute(request, manifests, request_root: Path) -> dict:
                         run_stage_command(command, cwd=build_workdir, log_path=log_path)
             if kernel_tools:
                 _validate_kernel_workspaces(request)
-                kernel_workspace = _kernel_workspace_root(request)
                 for kernel_tool in kernel_tools:
-                    run_stage_command(kernel_tool["command"], cwd=kernel_workspace, log_path=log_path)
+                    run_stage_command(
+                        kernel_tool["command"],
+                        cwd=_kernel_tool_cwd(request, kernel_tool),
+                        log_path=log_path,
+                    )
             status = "succeeded"
         except MissingAssetError as exc:
             return _failed_stage_result(
