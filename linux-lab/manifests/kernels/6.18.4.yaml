@@ -1,0 +1,25 @@
+key: "6.18.4"
+supported_arches:
+  - "x86_64"
+  - "arm64"
+supported_profiles:
+  - "debug"
+  - "bpf"
+  - "rust"
+  - "samples"
+  - "debug-tools"
+  - "minimal"
+required_profiles: []
+default_compat: true
+source_url: "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.4.tar.xz"
+source_sha256: "phase1-placeholder"
+patch_set: null
+config_family: "modern"
+tool_groups:
+  - "debug-core"
+  - "bpf-core"
+example_groups:
+  - "modules-core"
+  - "userspace-core"
+  - "rust-core"
+  - "bpf-core"

@@ -1,0 +1,19 @@
+key: "default-lab"
+kind: "meta"
+precedence: 0
+replaces: []
+expands_to:
+  - "debug"
+  - "bpf"
+  - "rust"
+  - "samples"
+  - "debug-tools"
+fragment_ref: null
+compatible_kernels:
+  - "*"
+compatible_arches:
+  - "*"
+host_tools: []
+tool_groups: []
+example_groups: []
+post_build_refs: []

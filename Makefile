@@ -1,7 +1,14 @@
 ARCHES := x86_64 aarch64
 ARCH_GOAL := $(firstword $(filter $(ARCHES),$(MAKECMDGOALS)))
+LINUX_LAB_KERNEL ?= 6.18.4
+LINUX_LAB_ARCH ?= x86_64
+LINUX_LAB_IMAGE ?= noble
+LINUX_LAB_PROFILES ?= default-lab
+LINUX_LAB_MIRROR ?=
+LINUX_LAB_PROFILE_ARGS := $(foreach profile,$(LINUX_LAB_PROFILES),--profile $(profile))
+LINUX_LAB_MIRROR_ARG := $(if $(strip $(LINUX_LAB_MIRROR)),--mirror $(LINUX_LAB_MIRROR),)
 
-.PHONY: c rust test-all xv6 xv6-clean test-xv6 linux1 linux1-curses test-linux1 linux1-clean clean $(ARCHES)
+.PHONY: c rust test-all xv6 xv6-clean test-xv6 linux1 linux1-curses test-linux1 linux1-clean linux-lab-validate linux-lab-plan clean $(ARCHES)
 
 c:
 	@if [ -z "$(ARCH_GOAL)" ]; then \
@@ -52,6 +59,12 @@ linux1-curses:
 
 test-linux1:
 	@pytest tests/test_linux1.py -v
+
+linux-lab-validate:
+	@linux-lab/bin/linux-lab validate --kernel $(LINUX_LAB_KERNEL) --arch $(LINUX_LAB_ARCH) --image $(LINUX_LAB_IMAGE) $(LINUX_LAB_PROFILE_ARGS) $(LINUX_LAB_MIRROR_ARG)
+
+linux-lab-plan:
+	@linux-lab/bin/linux-lab plan --kernel $(LINUX_LAB_KERNEL) --arch $(LINUX_LAB_ARCH) --image $(LINUX_LAB_IMAGE) $(LINUX_LAB_PROFILE_ARGS) $(LINUX_LAB_MIRROR_ARG)
 
 linux1-clean:
 	@rm -rf build/linux1

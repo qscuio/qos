@@ -1,0 +1,21 @@
+key: "4.19.317"
+supported_arches:
+  - "x86_64"
+  - "arm64"
+supported_profiles:
+  - "debug"
+  - "bpf"
+  - "rust"
+  - "samples"
+  - "debug-tools"
+  - "minimal"
+required_profiles: []
+default_compat: false
+source_url: "https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.19.317.tar.xz"
+source_sha256: "phase1-placeholder"
+patch_set: "linux-lab/patches/linux-4.19.317/kernel.patch"
+config_family: "modern"
+tool_groups:
+  - "debug-core"
+example_groups:
+  - "modules-core"

@@ -1,0 +1,23 @@
+key: "6.9.8"
+supported_arches:
+  - "x86_64"
+  - "arm64"
+supported_profiles:
+  - "debug"
+  - "bpf"
+  - "rust"
+  - "samples"
+  - "debug-tools"
+  - "minimal"
+required_profiles: []
+default_compat: false
+source_url: "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.9.8.tar.xz"
+source_sha256: "phase1-placeholder"
+patch_set: "linux-lab/patches/linux-6.9.8/kernel.patch"
+config_family: "modern"
+tool_groups:
+  - "debug-core"
+  - "bpf-core"
+example_groups:
+  - "modules-core"
+  - "bpf-core"

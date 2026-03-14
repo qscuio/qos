@@ -1,0 +1,18 @@
+key: "debug-tools"
+kind: "concrete"
+precedence: 50
+replaces: []
+expands_to: []
+fragment_ref: "linux-lab/fragments/debug-tools.yaml"
+compatible_kernels:
+  - "*"
+compatible_arches:
+  - "*"
+host_tools:
+  - "cgdb"
+  - "crash"
+tool_groups:
+  - "debug-tools"
+example_groups: []
+post_build_refs:
+  - "linux-lab/tools/debug-tools.yaml"

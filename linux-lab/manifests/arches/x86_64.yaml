@@ -1,0 +1,9 @@
+key: "x86_64"
+toolchain_prefix: "x86_64-linux-gnu-"
+kernel_image_name: "bzImage"
+qemu_machine: "pc"
+qemu_cpu: "qemu64"
+console: "ttyS0"
+supported_images:
+  - "noble"
+  - "jammy"

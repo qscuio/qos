@@ -1,0 +1,19 @@
+key: "minimal"
+kind: "concrete"
+precedence: 100
+replaces:
+  - "debug"
+  - "bpf"
+  - "rust"
+  - "samples"
+  - "debug-tools"
+expands_to: []
+fragment_ref: null
+compatible_kernels:
+  - "*"
+compatible_arches:
+  - "*"
+host_tools: []
+tool_groups: []
+example_groups: []
+post_build_refs: []

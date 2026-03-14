@@ -1,0 +1,16 @@
+key: "samples"
+kind: "concrete"
+precedence: 40
+replaces: []
+expands_to: []
+fragment_ref: "linux-lab/fragments/samples.yaml"
+compatible_kernels:
+  - "*"
+compatible_arches:
+  - "*"
+host_tools: []
+tool_groups: []
+example_groups:
+  - "modules-core"
+  - "userspace-core"
+post_build_refs: []

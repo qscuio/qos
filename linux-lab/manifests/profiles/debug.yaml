@@ -1,0 +1,16 @@
+key: "debug"
+kind: "concrete"
+precedence: 10
+replaces: []
+expands_to: []
+fragment_ref: "linux-lab/fragments/debug.yaml"
+compatible_kernels:
+  - "*"
+compatible_arches:
+  - "*"
+host_tools:
+  - "gdb-multiarch"
+tool_groups:
+  - "debug-core"
+example_groups: []
+post_build_refs: []

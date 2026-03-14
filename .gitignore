@@ -18,6 +18,7 @@ qemu/configs/*.qcow2
 
 # linux1 generated artifacts
 build/linux1/
+build/linux-lab/
 third_party/linux1/
 
 # linux1 source-tree generated build byproducts
