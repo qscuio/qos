@@ -136,6 +136,84 @@ def test_tooling_helper_rejects_unknown_build_policy(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("copy_rule", "match"),
+    [
+        ({"from": "/tmp/crash/extensions", "to": "extensions/"}, "repo-relative"),
+        ({"from": "linux-lab/tools/assets/crash/extensions/", "to": "/tmp/extensions"}, "checkout-relative"),
+        ({"from": "../tools/assets/crash/extensions/", "to": "extensions/"}, "repo-relative"),
+        ({"from": "linux-lab/tools/assets/crash/extensions/", "to": "../extensions"}, "checkout-relative"),
+    ],
+)
+def test_tooling_helper_rejects_invalid_asset_copy_paths(
+    tmp_path: Path, copy_rule: dict[str, str], match: str
+) -> None:
+    module = _load_module("linux_lab_tooling_invalid_copies", MODULE_PATH)
+    tools_root = tmp_path / "labroot" / "tools"
+    tools_root.mkdir(parents=True, exist_ok=True)
+    (tools_root / "crash.yaml").write_text(
+        "\n".join(
+            [
+                'key: "crash"',
+                'repo_url: "https://example.invalid/crash.git"',
+                'checkout_dir: "build/linux-lab/tools/crash"',
+                'build_policy: "host-build"',
+                "prepare_commands: []",
+                "build_commands: []",
+                "guest_build_commands: []",
+                "post_prepare_asset_copies:",
+                f'  - from: "{copy_rule["from"]}"',
+                f'    to: "{copy_rule["to"]}"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=match):
+        module.resolve_tool_plan(
+            tool_keys=["crash"],
+            linux_lab_root=tmp_path / "labroot",
+        )
+
+
+def test_tooling_helper_resolves_asset_copy_sources_from_override_root(tmp_path: Path) -> None:
+    module = _load_module("linux_lab_tooling_override_assets", MODULE_PATH)
+    labroot = tmp_path / "labroot"
+    tools_root = labroot / "tools"
+    tools_root.mkdir(parents=True, exist_ok=True)
+    asset_source = labroot / "tools" / "assets" / "crash" / "extensions"
+    asset_source.mkdir(parents=True, exist_ok=True)
+    (asset_source / "echo.c").write_text("fixture\n", encoding="utf-8")
+    (tools_root / "crash.yaml").write_text(
+        "\n".join(
+            [
+                'key: "crash"',
+                'repo_url: "https://example.invalid/crash.git"',
+                'checkout_dir: "build/linux-lab/tools/crash"',
+                'build_policy: "host-build"',
+                "prepare_commands: []",
+                "build_commands: []",
+                "guest_build_commands: []",
+                "post_prepare_asset_copies:",
+                '  - from: "linux-lab/tools/assets/crash/extensions/"',
+                '    to: "extensions/"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    plan = module.resolve_tool_plan(tool_keys=["crash"], linux_lab_root=labroot)
+
+    assert plan[0]["post_prepare_asset_copies"] == [
+        {
+            "from": str(asset_source),
+            "to": "extensions/",
+        }
+    ]
+
+
 def test_run_dry_run_emits_tool_metadata() -> None:
     result = _run(
         [
@@ -183,6 +261,10 @@ def test_run_dry_run_emits_tool_metadata() -> None:
     assert external_tools["cgdb"]["build_policy"] == "host-build"
     assert external_tools["libbpf-bootstrap"]["build_policy"] == "guest-build"
     assert external_tools["retsnoop"]["build_policy"] == "guest-build"
+    assert external_tools["crash"]["guest_build_commands"] == []
+    assert external_tools["cgdb"]["guest_build_commands"] == []
+    assert external_tools["libbpf-bootstrap"]["guest_build_commands"] == [["make", "minimal"]]
+    assert external_tools["retsnoop"]["guest_build_commands"] == [["make"]]
     assert external_tools["crash"]["post_prepare_asset_copies"] == [
         {
             "from": str(ROOT / "linux-lab" / "tools" / "assets" / "crash" / "extensions"),

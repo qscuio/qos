@@ -48,8 +48,22 @@ def _normalize_asset_copies(raw: Any, *, path: Path) -> list[dict[str, str]]:
         destination = item.get("to")
         if not isinstance(source, str) or not isinstance(destination, str):
             raise ValueError(f"{path} field post_prepare_asset_copies[{index}] must include string from/to")
+        source_path = Path(source)
+        destination_path = Path(destination)
+        if source_path.is_absolute() or ".." in source_path.parts:
+            raise ValueError(f"{path} field post_prepare_asset_copies[{index}].from must be repo-relative")
+        if destination_path.is_absolute() or ".." in destination_path.parts:
+            raise ValueError(f"{path} field post_prepare_asset_copies[{index}].to must be checkout-relative")
         copies.append({"from": source, "to": destination})
     return copies
+
+
+def _resolve_repo_relative_path(raw_path: str, *, linux_lab_root: Path) -> Path:
+    path = Path(raw_path)
+    if linux_lab_root.name != "linux-lab" and path.parts[:1] == ("linux-lab",):
+        return linux_lab_root / Path(*path.parts[1:])
+    repo_root = linux_lab_root.parent if linux_lab_root.name == "linux-lab" else linux_lab_root
+    return repo_root / path
 
 
 def load_tool_manifests(root: Path) -> dict[str, dict[str, Any]]:
@@ -102,9 +116,7 @@ def resolve_tool_plan(*, tool_keys: list[str], linux_lab_root: Path) -> list[dic
                 build_workdir = checkout_dir / build_workdir
         asset_copies: list[dict[str, str]] = []
         for copy_rule in manifest["post_prepare_asset_copies"]:
-            source = Path(copy_rule["from"])
-            if not source.is_absolute():
-                source = workspace_root / source
+            source = _resolve_repo_relative_path(copy_rule["from"], linux_lab_root=linux_lab_root)
             asset_copies.append({"from": str(source), "to": copy_rule["to"]})
         plan.append(
             {
