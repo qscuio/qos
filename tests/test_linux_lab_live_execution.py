@@ -200,3 +200,37 @@ def test_run_stage_command_streams_output_before_process_exit(tmp_path: Path) ->
     assert errors == []
     assert saw_start
     assert "finish" in log_path.read_text(encoding="utf-8")
+
+
+def test_live_run_uses_request_root_for_relative_artifact_paths(tmp_path: Path, monkeypatch) -> None:
+    fetch_mod = _load_module("linux_lab_fetch_stage_relative", FETCH_STAGE)
+    patch_mod = _load_module("linux_lab_patch_stage_relative", PATCH_STAGE)
+    config_mod = _load_module("linux_lab_config_stage_relative", CONFIG_STAGE)
+    build_mod = _load_module("linux_lab_build_stage_relative", BUILD_STAGE)
+    state_mod = _load_module("linux_lab_state_stage_relative", STATE_MODULE)
+
+    monkeypatch.chdir(tmp_path)
+    archive = tmp_path / "linux-1.2.3.tar.xz"
+    patch_path = tmp_path / "kernel.patch"
+    fragment_path = tmp_path / "debug.conf"
+    sha256 = _make_fake_kernel_archive(archive, "1.2.3")
+    _make_patch(patch_path, "1.2.3")
+    fragment_path.write_text("CONFIG_TEST_FEATURE=y\n", encoding="utf-8")
+
+    request = _make_request(tmp_path, "1.2.3")
+    request.artifact_root = Path("request-rel")
+    manifests = _make_manifests(archive, sha256, patch_path, fragment_path)
+    request_root = tmp_path / "request-rel"
+    state_mod.ensure_request_dirs(request_root)
+
+    fetch_mod.STAGE.executor(request, manifests, request_root)
+    patch_mod.STAGE.executor(request, manifests, request_root)
+    config_mod.STAGE.executor(request, manifests, request_root)
+    build_result = build_mod.STAGE.executor(request, manifests, request_root)
+
+    kernel_image = request_root / "workspace" / "build" / "arch" / "x86_64" / "boot" / "bzImage"
+    nested_images = list((request_root / "workspace" / "kernel").glob("**/request-rel/workspace/build/arch/x86_64/boot/bzImage"))
+
+    assert build_result["status"] == "succeeded"
+    assert kernel_image.is_file()
+    assert nested_images == []

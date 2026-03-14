@@ -21,7 +21,7 @@ def _execute(request, manifests, request_root: Path) -> dict:
     linux_lab_root = _linux_lab_root()
     arch = manifests.arches[request.arch]
     kernel_image = (
-        Path(request.artifact_root)
+        request_root
         / "workspace"
         / "build"
         / "arch"
@@ -29,7 +29,7 @@ def _execute(request, manifests, request_root: Path) -> dict:
         / "boot"
         / arch.kernel_image_name
     )
-    image_path = Path(request.artifact_root) / "images" / f"{request.image_release}.img"
+    image_path = request_root / "images" / f"{request.image_release}.img"
     script_dir = linux_lab_root / "scripts"
     boot_script = script_dir / "boot.sh"
     up_script = script_dir / "up.sh"

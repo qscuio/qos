@@ -21,7 +21,7 @@ def _execute(request, manifests, request_root: Path) -> dict:
     base_config = LINUX_LAB_ROOT / "configs" / request.arch / "defconfig"
     fragment_paths = resolve_profile_fragment_paths(manifests, request.profiles, LINUX_LAB_ROOT)
     fragment_refs = [_display_ref(path) for path in fragment_paths]
-    output_config = Path(request.artifact_root) / "workspace" / "build" / ".config"
+    output_config = request_root / "workspace" / "build" / ".config"
     log_path = request_root / "logs" / "configure.log"
     status = "placeholder"
     if request.command == "run" and request.dry_run:

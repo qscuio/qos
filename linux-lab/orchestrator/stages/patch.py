@@ -12,7 +12,7 @@ LINUX_LAB_ROOT = Path(__file__).resolve().parents[2]
 def _execute(request, manifests, request_root: Path) -> dict:
     kernel = manifests.kernels[request.kernel_version]
     log_path = request_root / "logs" / "patch.log"
-    workspace_root = Path(request.artifact_root) / "workspace"
+    workspace_root = request_root / "workspace"
     source_tree = workspace_root / "kernel" / f"linux-{request.kernel_version}"
     patch_path = None
     if kernel.patch_set:

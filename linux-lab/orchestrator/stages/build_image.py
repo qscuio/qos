@@ -21,8 +21,8 @@ def _execute(request, manifests, request_root: Path) -> dict:
     linux_lab_root = _linux_lab_root()
     assets = release_asset_paths(linux_lab_root, request.image_release)
     script_path = linux_lab_root / "scripts" / "create-image.sh"
-    image_path = Path(request.artifact_root) / "images" / f"{request.image_release}.img"
-    chroot_dir = Path(request.artifact_root) / "chroot"
+    image_path = request_root / "images" / f"{request.image_release}.img"
+    chroot_dir = request_root / "chroot"
     mirror_url = resolve_mirror_url(
         image_release=request.image_release,
         arch=request.arch,

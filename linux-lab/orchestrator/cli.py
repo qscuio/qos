@@ -68,7 +68,7 @@ def _native_request_from_args(args: argparse.Namespace):
 
 
 def _plan(manifests, request) -> int:
-    request_root = Path(request.artifact_root)
+    request_root = Path(request.artifact_root).resolve()
     ensure_request_dirs(request_root)
     write_json(request_root / "request.json", request_to_dict(request))
     execute_plan(request, manifests, PHASE1_STAGES)

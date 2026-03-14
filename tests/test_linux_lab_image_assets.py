@@ -76,3 +76,19 @@ def test_qemu_helper_builds_boot_commands_for_both_arches() -> None:
     assert arm[0] == "qemu-system-aarch64"
     assert "root=/dev/vda" in " ".join(arm)
     assert "console=ttyAMA0" in " ".join(arm)
+
+
+def test_x86_qemu_helper_falls_back_to_tcg_without_kvm() -> None:
+    module = _load_module("linux_lab_qemu_no_kvm", QEMU_MODULE)
+
+    x86 = module.build_qemu_command(
+        arch="x86_64",
+        kernel_image=Path("build/linux-lab/kernel/arch/x86_64/boot/bzImage"),
+        disk_image=Path("build/linux-lab/images/noble.img"),
+        shared_dir=Path("."),
+        enable_kvm=False,
+    )
+
+    assert "-enable-kvm" not in x86
+    assert "tcg,thread=multi" in x86
+    assert "root=/dev/sda" in " ".join(x86)

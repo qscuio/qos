@@ -87,6 +87,78 @@ def test_build_image_stage_executes_helper_script_in_mock_mode(tmp_path: Path, m
     assert "mode=mock" in debugfs.stdout
 
 
+def test_create_image_helper_uses_foreign_debootstrap_for_cross_arch_targets(
+    tmp_path: Path,
+) -> None:
+    fakebin = tmp_path / "bin"
+    fakebin.mkdir()
+    log_path = tmp_path / "helper.log"
+
+    def _write_stub(name: str, body: str) -> None:
+        path = fakebin / name
+        path.write_text(body, encoding="utf-8")
+        path.chmod(0o755)
+
+    _write_stub(
+        "sudo",
+        "#!/usr/bin/env bash\nprintf 'sudo:%s\\n' \"$*\" >> \"$LINUX_LAB_TEST_LOG\"\n\"$@\"\n",
+    )
+    _write_stub(
+        "dpkg",
+        "#!/usr/bin/env bash\nif [[ \"$1\" == \"--print-architecture\" ]]; then\n  printf '%s\\n' \"${LINUX_LAB_HOST_ARCH:-amd64}\"\n  exit 0\nfi\nexec /usr/bin/dpkg \"$@\"\n",
+    )
+    _write_stub(
+        "debootstrap",
+        "#!/usr/bin/env bash\nprintf 'debootstrap:%s\\n' \"$*\" >> \"$LINUX_LAB_TEST_LOG\"\nexit 0\n",
+    )
+    _write_stub(
+        "chroot",
+        "#!/usr/bin/env bash\nprintf 'chroot:%s\\n' \"$*\" >> \"$LINUX_LAB_TEST_LOG\"\nexit 0\n",
+    )
+    _write_stub(
+        "mkfs.ext4",
+        "#!/usr/bin/env bash\nprintf 'mkfs.ext4:%s\\n' \"$*\" >> \"$LINUX_LAB_TEST_LOG\"\nexit 0\n",
+    )
+    _write_stub("qemu-x86_64-static", "#!/usr/bin/env bash\nexit 0\n")
+
+    image_path = tmp_path / "cross.img"
+    chroot_dir = tmp_path / "cross-chroot"
+
+    result = subprocess.run(
+        [
+            str(SCRIPTS_DIR / "create-image.sh"),
+            "--arch",
+            "x86_64",
+            "--release",
+            "noble",
+            "--image",
+            str(image_path),
+            "--chroot",
+            str(chroot_dir),
+            "--netcfg",
+            str(ROOT / "linux-lab" / "images" / "releases" / "noble" / "01-netcfg.yaml"),
+            "--sources-list",
+            str(ROOT / "linux-lab" / "images" / "releases" / "noble" / "sources.list"),
+            "--mirror-url",
+            "https://mirrors.tuna.tsinghua.edu.cn/ubuntu/",
+        ],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fakebin}:{os.environ['PATH']}",
+            "LINUX_LAB_TEST_LOG": str(log_path),
+            "LINUX_LAB_HOST_ARCH": "arm64",
+            "LINUX_LAB_IMAGE_SIZE_MB": "16",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "debootstrap:--foreign --arch=amd64 noble" in log_text
+    assert f"chroot:{chroot_dir} /usr/bin/qemu-x86_64-static /bin/bash -c /debootstrap/debootstrap --second-stage" in log_text
+
+
 def test_boot_stage_executes_helper_script_in_print_mode(tmp_path: Path, monkeypatch) -> None:
     boot_mod = _load_module("linux_lab_boot_live", BOOT_STAGE)
     state_mod = _load_module("linux_lab_state_boot_live", STATE_MODULE)

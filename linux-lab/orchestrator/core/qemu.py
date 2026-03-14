@@ -12,19 +12,18 @@ def build_qemu_command(
     network_up_script: Path | None = None,
     network_down_script: Path | None = None,
     pidfile: Path | None = None,
+    enable_kvm: bool | None = None,
 ) -> list[str]:
     tap_up = str(network_up_script) if network_up_script is not None else "no"
     tap_down = str(network_down_script) if network_down_script is not None else "no"
     if arch == "x86_64":
+        use_kvm = Path("/dev/kvm").exists() if enable_kvm is None else enable_kvm
         command = [
             "qemu-system-x86_64",
             "-qmp",
             "tcp:localhost:23456,server,nowait",
             "-smp",
             "4",
-            "-enable-kvm",
-            "-cpu",
-            "host",
             "-m",
             "8G",
             "-kernel",
@@ -51,6 +50,10 @@ def build_qemu_command(
             "-monitor",
             "telnet:localhost:12345,server,nowait",
         ]
+        if use_kvm:
+            command[5:5] = ["-enable-kvm", "-cpu", "host"]
+        else:
+            command[5:5] = ["-accel", "tcg,thread=multi", "-cpu", "max"]
         if pidfile is not None:
             command.extend(["-pidfile", str(pidfile)])
         return command

@@ -35,7 +35,7 @@ def _execute(request, manifests, request_root: Path) -> dict:
     example_plans = resolve_example_plan(
         example_groups=example_groups,
         linux_lab_root=_linux_lab_root(),
-        build_root=Path(request.artifact_root) / "workspace" / "build",
+        build_root=request_root / "workspace" / "build",
     )
     status = "placeholder"
     if request.command == "run" and request.dry_run:

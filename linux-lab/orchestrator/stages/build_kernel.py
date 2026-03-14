@@ -8,7 +8,7 @@ from orchestrator.core.stages import StageDefinition, auto_jobs, make_stage_resu
 def _execute(request, manifests, request_root: Path) -> dict:
     kernel = manifests.kernels[request.kernel_version]
     arch = manifests.arches[request.arch]
-    workspace_root = Path(request.artifact_root) / "workspace"
+    workspace_root = request_root / "workspace"
     kernel_tree = workspace_root / "kernel" / f"linux-{request.kernel_version}"
     build_root = workspace_root / "build"
     kernel_image_path = build_root / "arch" / request.arch / "boot" / arch.kernel_image_name

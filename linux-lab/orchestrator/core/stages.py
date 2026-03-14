@@ -157,7 +157,7 @@ def write_stage_state(request_root: Path, result: dict) -> None:
 
 
 def execute_plan(request, manifests, stage_definitions: list[StageDefinition]) -> None:
-    request_root = Path(request.artifact_root)
+    request_root = Path(request.artifact_root).resolve()
     ensure_request_dirs(request_root)
 
     validate_result = validate_state(request, request_root)
