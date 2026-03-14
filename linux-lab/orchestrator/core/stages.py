@@ -136,3 +136,5 @@ def execute_plan(request, manifests, stage_definitions: list[StageDefinition]) -
         if not result["outputs"]:
             result["outputs"] = list(stage.produces)
         write_stage_state(request_root, result)
+        if request.command == "run" and request.stop_after == stage.name:
+            break

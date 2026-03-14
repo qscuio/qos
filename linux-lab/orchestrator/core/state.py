@@ -45,4 +45,7 @@ def request_to_dict(request) -> dict[str, Any]:
         "legacy_args": request.legacy_args,
         "request_fingerprint": request.request_fingerprint,
         "artifact_root": str(request.artifact_root),
+        "command": request.command,
+        "dry_run": request.dry_run,
+        "stop_after": request.stop_after,
     }

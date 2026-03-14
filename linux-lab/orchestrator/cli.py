@@ -20,13 +20,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="linux-lab")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for command in ("validate", "plan"):
+    for command in ("validate", "plan", "run"):
         subparser = subparsers.add_parser(command)
         subparser.add_argument("--kernel", required=True)
         subparser.add_argument("--arch", required=True)
         subparser.add_argument("--image", required=True)
         subparser.add_argument("--profile", action="append", dest="profiles", required=True)
         subparser.add_argument("--mirror")
+        if command == "run":
+            subparser.add_argument("--dry-run", action="store_true")
+            subparser.add_argument(
+                "--stop-after",
+                choices=(
+                    "fetch",
+                    "prepare",
+                    "patch",
+                    "configure",
+                    "build-kernel",
+                    "build-tools",
+                    "build-examples",
+                    "build-image",
+                    "boot",
+                ),
+            )
 
     return parser
 
@@ -44,6 +60,9 @@ def _native_request_from_args(args: argparse.Namespace):
         image=args.image,
         profiles=args.profiles,
         mirror=args.mirror,
+        command=args.command,
+        dry_run=getattr(args, "dry_run", False),
+        stop_after=getattr(args, "stop_after", None),
     )
     return manifests, request
 

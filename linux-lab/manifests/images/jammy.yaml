@@ -3,4 +3,4 @@ default_compat: false
 mirror_regions:
   - "cn"
   - "sg"
-recipe_ref: "linux-lab/images/jammy.yaml"
+recipe_ref: "linux-lab/images/releases/jammy"

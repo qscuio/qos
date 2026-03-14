@@ -24,6 +24,9 @@ class ResolvedRequest:
     legacy_args: dict[str, str]
     request_fingerprint: str
     artifact_root: Path
+    command: str = "plan"
+    dry_run: bool = False
+    stop_after: str | None = None
 
 
 def normalize_arch(value: str) -> str:
@@ -135,6 +138,9 @@ def _resolve_request(
     mirror: str | None,
     compat_mode: bool,
     legacy_args: dict[str, str],
+    command: str,
+    dry_run: bool = False,
+    stop_after: str | None = None,
 ) -> ResolvedRequest:
     arch_key = normalize_arch(arch)
     concrete_profiles = _expand_profiles(manifests, profiles)
@@ -148,6 +154,9 @@ def _resolve_request(
             "profiles": concrete_profiles,
             "mirror_region": mirror,
             "compat_mode": compat_mode,
+            "command": command,
+            "dry_run": dry_run,
+            "stop_after": stop_after,
             "schema_version": SCHEMA_VERSION,
         }
     )
@@ -162,6 +171,9 @@ def _resolve_request(
         legacy_args=legacy_args,
         request_fingerprint=fingerprint,
         artifact_root=artifact_root,
+        command=command,
+        dry_run=dry_run,
+        stop_after=stop_after,
     )
 
 
@@ -173,6 +185,9 @@ def resolve_native_request(
     image: str | None,
     profiles: list[str] | None,
     mirror: str | None,
+    command: str = "plan",
+    dry_run: bool = False,
+    stop_after: str | None = None,
 ) -> ResolvedRequest:
     if not kernel:
         raise RequestValidationError("--kernel is required")
@@ -192,6 +207,9 @@ def resolve_native_request(
         mirror=mirror,
         compat_mode=False,
         legacy_args={},
+        command=command,
+        dry_run=dry_run,
+        stop_after=stop_after,
     )
 
 
@@ -210,4 +228,5 @@ def resolve_compat_request(*, manifests, raw_args: list[str]) -> ResolvedRequest
         mirror=legacy_args.get("mirror"),
         compat_mode=True,
         legacy_args=legacy_args,
+        command="plan",
     )

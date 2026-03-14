@@ -3,4 +3,4 @@ default_compat: true
 mirror_regions:
   - "cn"
   - "sg"
-recipe_ref: "linux-lab/images/noble.yaml"
+recipe_ref: "linux-lab/images/releases/noble"
