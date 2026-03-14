@@ -366,9 +366,12 @@ struct super_block * ext2_read_super (struct super_block * sb, void * data,
 	int fs_converted = 0;
 #endif
 
+	printk("EXT2: probing dev %d/%d\n", MAJOR(dev), MINOR(dev));
+
 	set_opt (sb->u.ext2_sb.s_mount_opt, CHECK_NORMAL);
 	if (!parse_options ((char *) data, &sb_block,
 	    &sb->u.ext2_sb.s_mount_opt)) {
+		printk("EXT2: parse_options failed\n");
 		sb->s_dev = 0;
 		return NULL;
 	}
@@ -413,8 +416,11 @@ struct super_block * ext2_read_super (struct super_block * sb, void * data,
 		logic_sb_block = sb_block / sb->s_blocksize;
 		offset = sb_block % sb->s_blocksize;
 		bh = bread (dev, logic_sb_block, sb->s_blocksize);
-		if(!bh)
+		if(!bh) {
+			printk("EXT2: bread(logic_sb_block=%lu, blocksize=%lu) failed\n",
+				logic_sb_block, sb->s_blocksize);
 			return NULL;
+		}
 		es = (struct ext2_super_block *) (((char *)bh->b_data) + offset);
 		sb->u.ext2_sb.s_es = es;
 		if (es->s_magic != EXT2_SUPER_MAGIC) {

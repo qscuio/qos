@@ -49,6 +49,37 @@ Run full Python test suite:
 pytest -q
 ```
 
+## Linux 1.0.0 Workflow
+
+Linux 1.0.0 is integrated as a learning kernel under `linux-1.0.0/`.
+
+Build and boot pipeline:
+
+```bash
+make linux1
+```
+
+This runs:
+
+1. `scripts/fetch_linux1_sources.sh`
+2. `scripts/build_linux1_kernel.sh`
+3. `scripts/build_linux1_userspace.sh`
+4. `scripts/build_linux1_lilo.sh`
+5. `scripts/mk_linux1_disk.sh`
+6. `scripts/run_linux1_qemu.sh`
+
+Artifacts:
+
+- kernel: `build/linux1/kernel/vmlinuz-1.0.0`
+- disk image: `build/linux1/images/linux1-disk.img`
+- boot log: `build/linux1/logs/boot.log`
+
+Linux1 test target:
+
+```bash
+make test-linux1
+```
+
 ## Manual QEMU Testing
 
 All commands below are run from repo root.

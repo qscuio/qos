@@ -305,7 +305,7 @@ extern struct task_struct *current;
 extern unsigned long volatile jiffies;
 extern unsigned long itimer_ticks;
 extern unsigned long itimer_next;
-extern struct timeval xtime;
+extern volatile struct timeval xtime;
 extern int need_resched;
 
 #define CURRENT_TIME (xtime.tv_sec)
@@ -354,21 +354,31 @@ __asm__("str %%ax\n\t" \
  * This also clears the TS-flag if the task we switched to has used
  * tha math co-processor latest.
  */
-#define switch_to(tsk) \
-__asm__("cmpl %%ecx,_current\n\t" \
-	"je 1f\n\t" \
-	"cli\n\t" \
-	"xchgl %%ecx,_current\n\t" \
-	"ljmp %0\n\t" \
-	"sti\n\t" \
-	"cmpl %%ecx,_last_task_used_math\n\t" \
-	"jne 1f\n\t" \
-	"clts\n" \
-	"1:" \
-	: /* no output */ \
-	:"m" (*(((char *)&tsk->tss.tr)-4)), \
-	 "c" (tsk) \
-	:"cx")
+#define switch_to(tsk) do { \
+	struct { \
+		unsigned long offset; \
+		unsigned short selector; \
+	} __attribute__((packed)) __tmp = { 0, (tsk)->tss.tr }; \
+	struct task_struct *__tmp_task = (tsk); \
+	/* \
+	 * Modern GCC may address the far jump operand through %%ecx, which is \
+	 * overwritten by xchgl %%ecx,_current before ljmp executes. Keep the \
+	 * far pointer in a stable stack slot instead. \
+	 */ \
+	__asm__ __volatile__("cmpl %%ecx,_current\n\t" \
+		"je 1f\n\t" \
+		"cli\n\t" \
+		"xchgl %%ecx,_current\n\t" \
+		"ljmp *%1\n\t" \
+		"sti\n\t" \
+		"cmpl %%ecx,_last_task_used_math\n\t" \
+		"jne 1f\n\t" \
+		"clts\n" \
+		"1:" \
+		: "+c" (__tmp_task) \
+		: "m" (__tmp) \
+		: "memory"); \
+} while (0)
 
 #define _set_base(addr,base) \
 __asm__("movw %%dx,%0\n\t" \

@@ -75,8 +75,8 @@ LD86	=ld86 -0
 AS	=as
 LD	=ld
 HOSTCC	=gcc
+HOSTCFLAGS = -O2
 CC	=gcc -D__KERNEL__
-MAKE	=make
 CPP	=$(CC) -E
 AR	=ar
 STRIP	=strip
@@ -136,7 +136,7 @@ tools/version.h: $(CONFIGURE) Makefile
 	@echo \#define LINUX_COMPILE_DOMAIN \"`domainname`\" >> tools/version.h
 
 tools/build: tools/build.c $(CONFIGURE)
-	$(HOSTCC) $(CFLAGS) -o $@ $<
+	$(HOSTCC) $(HOSTCFLAGS) -o $@ $<
 
 boot/head.o: $(CONFIGURE) boot/head.s
 
@@ -194,7 +194,8 @@ zlilo: $(CONFIGURE) zImage
 	if [ -x /sbin/lilo ]; then /sbin/lilo; else /etc/lilo/install; fi
 
 tools/zSystem:	boot/head.o init/main.o tools/version.o linuxsubdirs
-	$(LD) $(LDFLAGS) -Ttext 100000 boot/head.o init/main.o tools/version.o \
+	$(LD) $(LDFLAGS) -T ../scripts/linux1_zsystem.ld \
+		boot/head.o init/main.o tools/version.o \
 		$(ARCHIVES) \
 		$(FILESYSTEMS) \
 		$(DRIVERS) \

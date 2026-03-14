@@ -43,8 +43,6 @@
 static int ext2_match (int len, const char * const name,
 		       struct ext2_dir_entry * de)
 {
-	unsigned char same;
-
 	if (!de || !de->inode || len > EXT2_NAME_LEN)
 		return 0;
 	/*
@@ -55,13 +53,7 @@ static int ext2_match (int len, const char * const name,
 		return 1;
 	if (len != de->name_len)
 		return 0;
-	__asm__("cld\n\t"
-		"repe ; cmpsb\n\t"
-		"setz %0"
-		:"=q" (same)
-		:"S" ((long) name), "D" ((long) de->name), "c" (len)
-		:"cx", "di", "si");
-	return (int) same;
+	return !memcmp(name, de->name, len);
 }
 
 /*

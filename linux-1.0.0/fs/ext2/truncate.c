@@ -25,13 +25,14 @@
 #include <linux/stat.h>
 #include <linux/locks.h>
 
-#define clear_block(addr,size,value) \
-	__asm__("cld\n\t" \
-		"rep\n\t" \
-		"stosl" \
-		: \
-		:"a" (value), "c" (size / 4), "D" ((long) (addr)) \
-		:"cx", "di")
+static inline void clear_block(void *addr, int size, unsigned long value)
+{
+	unsigned long *p = (unsigned long *)addr;
+	int i, count = size / sizeof(unsigned long);
+
+	for (i = 0; i < count; i++)
+		p[i] = value;
+}
 
 static int ext2_secrm_seed = 152;	/* Random generator base */
 

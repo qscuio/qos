@@ -94,11 +94,17 @@ extern inline unsigned long get_free_page(int priority)
 	unsigned long page;
 
 	page = __get_free_page(priority);
-	if (page)
+	if (page) {
+		unsigned long count;
+		unsigned long dest;
+
+		count = 1024;
+		dest = page;
 		__asm__ __volatile__("rep ; stosl"
-			: /* no outputs */ \
-			:"a" (0),"c" (1024),"D" (page)
-			:"di","cx");
+			: "+D" (dest), "+c" (count)
+			: "a" (0)
+			: "memory");
+	}
 	return page;
 }
 

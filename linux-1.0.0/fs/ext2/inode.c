@@ -25,13 +25,7 @@
 #include <linux/string.h>
 #include <linux/locks.h>
 
-#define clear_block(addr,size) \
-	__asm__("cld\n\t" \
-		"rep\n\t" \
-		"stosl" \
-		: \
-		:"a" (0), "c" (size / 4), "D" ((long) (addr)) \
-		:"cx", "di")
+#define clear_block(addr,size) memset((addr), 0, (size))
 
 void ext2_put_inode (struct inode * inode)
 {

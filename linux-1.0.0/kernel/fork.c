@@ -190,8 +190,10 @@ asmlinkage int sys_fork(struct pt_regs regs)
 			memcpy(p->ldt, current->ldt, LDT_ENTRIES*LDT_ENTRY_SIZE);
 	}
 	p->tss.bitmap = offsetof(struct tss_struct,io_bitmap);
-	for (i = 0; i < IO_BITMAP_SIZE+1 ; i++) /* IO bitmap is actually SIZE+1 */
+	for (i = 0; i < IO_BITMAP_SIZE ; i++)
 		p->tss.io_bitmap[i] = ~0;
+	/* switch_to() uses the word before tr as the far-jump offset */
+	p->tss.io_bitmap[IO_BITMAP_SIZE] = 0;
 	if (last_task_used_math == current)
 		__asm__("clts ; fnsave %0 ; frstor %0":"=m" (p->tss.i387));
 	p->semun = NULL; p->shm = NULL;

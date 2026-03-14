@@ -519,7 +519,7 @@ void mount_root(void)
 	for (fs_type = file_systems; fs_type->read_super; fs_type++) {
 		if (!fs_type->requires_dev)
 			continue;
-		sb = read_super(ROOT_DEV,fs_type->name,root_mountflags,NULL,1);
+		sb = read_super(ROOT_DEV,fs_type->name,root_mountflags,NULL,0);
 		if (sb) {
 			inode = sb->s_mounted;
 			inode->i_count += 3 ;	/* NOTE! it is logically used 4 times, not 1 */

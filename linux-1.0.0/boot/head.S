@@ -40,8 +40,8 @@ startup_32:
  * Clear BSS first so that there are no surprises...
  */
 	xorl %eax,%eax
-	movl $__edata,%edi
-	movl $__end,%ecx
+	movl $_edata,%edi
+	movl $_end,%ecx
 	subl %edi,%ecx
 	cld
 	rep

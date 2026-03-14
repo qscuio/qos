@@ -1,0 +1,99 @@
+--- a/common.h	2026-03-13 13:55:47.570737832 +0000
++++ b/common.h	2026-03-13 13:55:47.592829675 +0000
+@@ -7,6 +7,7 @@
+ #define COMMON_H
+
+ #include <sys/stat.h>
++#include <stdint.h>
+ #include <sys/types.h>
+
+ #ifndef PAGE_SIZE
+@@ -63,7 +64,7 @@
+     unsigned short delay; /* delay: wait that many 54 msec units. */
+     unsigned char port; /* COM port. 0 = none, 1 = COM1, etc. */
+     unsigned char ser_param; /* RS-232 parameters, must be 0 if unused */
+-    unsigned long timestamp; /* timestamp for restoration */
++    uint32_t timestamp; /* timestamp for restoration */
+     SECTOR_ADDR descr[3]; /* 2 descriptors and default command line */
+     unsigned char prompt; /* 0 = only on demand, =! 0 = always */
+     unsigned short msg_len; /* 0 if none */
+@@ -113,9 +114,9 @@
+     unsigned char loader;	/* 16: loader type */
+     unsigned char flags;	/* 17: loader flags */
+     unsigned short a;		/* 18: more LOADLIN hacks */
+-    unsigned long start;	/* 20: kernel start, filled in by loader */
+-    unsigned long ramdisk;	/* 24: RAM disk start address */
+-    unsigned long ramdisk_size;	/* 28: RAM disk size */
++    uint32_t start;	/* 20: kernel start, filled in by loader */
++    uint32_t ramdisk;	/* 24: RAM disk start address */
++    uint32_t ramdisk_size;	/* 28: RAM disk size */
+     unsigned short b,c;		/* 32: bzImage hacks */
+     unsigned short heap_end_ptr;/* 36: end of free area after setup code */
+ } SETUP_HDR;
+@@ -128,7 +129,7 @@
+
+ extern unsigned short drv_map[DRVMAP_SIZE+1]; /* needed for fixup maps */
+ extern int curr_drv_map;
+-extern unsigned long prt_map[PRTMAP_SIZE+1];
++extern uint32_t prt_map[PRTMAP_SIZE+1];
+ extern int curr_prt_map;
+
+
+--- a/common.c	1997-04-30 06:32:15.000000000 +0000
++++ b/common.c	2026-03-13 13:55:47.595986007 +0000
+@@ -17,7 +17,7 @@
+
+ unsigned short drv_map[DRVMAP_SIZE+1]; /* fixup maps ... */
+ int curr_drv_map;
+-unsigned long prt_map[PRTMAP_SIZE+1];
++uint32_t prt_map[PRTMAP_SIZE+1];
+ int curr_prt_map;
+
+
+--- a/bsect.c	1997-06-20 15:57:45.000000000 +0000
++++ b/bsect.c	2026-03-13 13:55:47.601841029 +0000
+@@ -96,7 +96,7 @@
+     int i_fd,m_fd,kt_fd,sectors;
+     char *message,*colon,*serial,*walk,*this,*keytable;
+     unsigned char table[SECTOR_SIZE];
+-    unsigned long timestamp;
++    uint32_t timestamp;
+
+     if (stat(map_file,&st) >= 0 && !S_ISREG(st.st_mode))
+ 	die("Map %s is not a regular file.",map_file);
+@@ -357,7 +357,7 @@
+ 	fallback[fallbacks++] = stralloc(fback);
+ #endif
+     }
+-    *(unsigned long *) descr->rd_size = 0; /* no RAM disk */
++    *(uint32_t *) descr->rd_size = 0; /* no RAM disk */
+     descr->start_page = 0; /* load low */
+     map_begin_section();
+     map_add_sector(fallback_buf);
+--- a/boot.c	2026-03-13 13:55:47.573472403 +0000
++++ b/boot.c	2026-03-13 13:55:47.604417639 +0000
+@@ -76,7 +76,7 @@
+ 	if (verbose > 0) printf("Mapping RAM disk %s\n",initrd);
+ 	fd = geo_open(&geo,initrd,O_RDONLY);
+ 	if (fstat(fd,&st) < 0) die("fstat %s: %s",initrd,strerror(errno));
+-	*(unsigned long *) descr->rd_size = st.st_size;
++	*(uint32_t *) descr->rd_size = st.st_size;
+ 	map_begin_section();
+ 	map_add(&geo,0,(st.st_size+SECTOR_SIZE-1)/SECTOR_SIZE);
+ 	sectors = map_end_section(&descr->initrd,0);
+--- a/lilo.c	2026-03-13 13:55:47.565054331 +0000
++++ b/lilo.c	2026-03-13 13:55:47.609929380 +0000
+@@ -152,10 +152,10 @@
+ 		    else printf("    Kernel is loaded \"high\", at 0x%08lx\n",
+ 			  (unsigned long) descrs.d.descr[image].start_page*
+ 			  PAGE_SIZE);
+-		    if (!*(unsigned long *) descrs.d.descr[image].rd_size)
++		    if (!*(uint32_t *) descrs.d.descr[image].rd_size)
+ 			printf("    No initial RAM disk\n");
+-		    else printf("    Initial RAM disk is %ld bytes\n",
+-			  *(unsigned long *) descrs.d.descr[image].rd_size);
++		    else printf("    Initial RAM disk is %u bytes\n",
++			  *(uint32_t *) descrs.d.descr[image].rd_size);
+ 		}
+ 		if (!geo_find(&geo,descrs.d.descr[image].start)) {
+ 		    printf("    Map sector not found\n");

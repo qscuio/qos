@@ -235,12 +235,13 @@ static void calibrate_delay(void)
 		__delay(loops_per_sec);
 		ticks = jiffies - ticks;
 		if (ticks >= HZ) {
-			__asm__("mull %1 ; divl %2"
-				:"=a" (loops_per_sec)
-				:"d" (HZ),
-				 "r" (ticks),
-				 "0" (loops_per_sec)
-				:"dx");
+			unsigned long lps = loops_per_sec;
+			__asm__("mull %[hz] ; divl %[ticks]"
+				: "+a" (lps)
+				: [hz] "r" ((unsigned long)HZ),
+				  [ticks] "r" ((unsigned long)ticks)
+				: "edx");
+			loops_per_sec = lps;
 			printk("ok - %lu.%02lu BogoMips\n",
 				loops_per_sec/500000,
 				(loops_per_sec/5000) % 100);

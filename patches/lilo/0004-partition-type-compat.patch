@@ -1,0 +1,11 @@
+--- a/boot.c
++++ b/boot.c
+@@ -160,7 +160,7 @@
+ }
+
+
+-#define PART(s,n) (((struct partition *) (s)[0].par_c.ptable)[(n)])
++#define PART(s,n) (((LILO_PARTITION *) (s)[0].par_c.ptable)[(n)])
+
+
+ void boot_other(char *loader,char *boot,char *part,IMAGE_DESCR *descr)

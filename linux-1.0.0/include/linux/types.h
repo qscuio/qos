@@ -93,28 +93,30 @@ typedef struct fd_set {
 
 #undef	__FD_SET
 #define __FD_SET(fd,fdsetp) \
-		__asm__ __volatile__("btsl %1,%0": \
-			"=m" (*(fd_set *) (fdsetp)):"r" ((int) (fd)))
+		do { \
+			((fd_set *)(fdsetp))->fds_bits[(fd) / __NFDBITS] |= \
+				(1UL << ((fd) % __NFDBITS)); \
+		} while (0)
 
 #undef	__FD_CLR
 #define __FD_CLR(fd,fdsetp) \
-		__asm__ __volatile__("btrl %1,%0": \
-			"=m" (*(fd_set *) (fdsetp)):"r" ((int) (fd)))
+		do { \
+			((fd_set *)(fdsetp))->fds_bits[(fd) / __NFDBITS] &= \
+				~(1UL << ((fd) % __NFDBITS)); \
+		} while (0)
 
 #undef	__FD_ISSET
-#define __FD_ISSET(fd,fdsetp) (__extension__ ({ \
-		unsigned char __result; \
-		__asm__ __volatile__("btl %1,%2 ; setb %0" \
-			:"=q" (__result) :"r" ((int) (fd)), \
-			"m" (*(fd_set *) (fdsetp))); \
-		__result; }))
+#define __FD_ISSET(fd,fdsetp) \
+	((((fd_set *)(fdsetp))->fds_bits[(fd) / __NFDBITS] >> \
+	((fd) % __NFDBITS)) & 1UL)
 
 #undef	__FD_ZERO
 #define __FD_ZERO(fdsetp) \
-		__asm__ __volatile__("cld ; rep ; stosl" \
-			:"=m" (*(fd_set *) (fdsetp)) \
-			:"a" (0), "c" (__FDSET_LONGS), \
-			"D" ((fd_set *) (fdsetp)) :"cx","di")
+		do { \
+			int __i; \
+			for (__i = 0; __i < __FDSET_LONGS; __i++) \
+				((fd_set *)(fdsetp))->fds_bits[__i] = 0; \
+		} while (0)
 
 struct ustat {
 	daddr_t f_tfree;

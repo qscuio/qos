@@ -1,0 +1,52 @@
+--- a/partition.c
++++ b/partition.c
+@@ -25,11 +25,11 @@
+ /* For older kernels ... */
+
+ #ifndef DOS_EXTENDED_PARTITION
+-#define DOS_EXTENDED_PARTITION EXTENDED_PARTITION
++#define DOS_EXTENDED_PARTITION 0x05
+ #endif
+
+ #ifndef LINUX_EXTENDED_PARTITION
+-#define LINUX_EXTENDED_PARTITION EXTENDED_PARTITION
++#define LINUX_EXTENDED_PARTITION 0x85
+ #endif
+
+
+@@ -39,7 +39,7 @@
+     DEVICE dev;
+     char backup_file[PATH_MAX+1];
+     int fd,bck_file,part,size,lin_3d,cyl;
+-    struct partition part_table[PART_MAX];
++    LILO_PARTITION part_table[PART_MAX];
+
+     if (!(dev_nr & PART_MASK) || (dev_nr & PART_MASK) > PART_MAX ||
+       (MAJOR(dev_nr) != MAJOR_HD && MAJOR(dev_nr) != MAJOR_XT && MAJOR(dev_nr)
+@@ -49,7 +49,7 @@
+       && !test ? O_RDWR : O_RDONLY);
+     part = (dev_nr & PART_MASK)-1;
+     if (lseek(fd,PART_TABLE_OFFSET,0) < 0) pdie("lseek partition table");
+-    if (!(size = read(fd,(char *) part_table,sizeof(struct partition)*
++    if (!(size = read(fd,(char *) part_table,sizeof(LILO_PARTITION)*
+       PART_MAX))) die("Short read on partition table");
+     if (size < 0) pdie("read partition table");
+     if (type && part_table[part].sys_ind != PART_LINUX_MINIX &&
+@@ -88,7 +88,7 @@
+ 	    if ((bck_file = creat(backup_file,0644)) < 0)
+ 		die("creat %s: %s",backup_file,strerror(errno));
+ 	    if (!(size = write(bck_file,(char *) part_table,
+-	      sizeof(struct partition)*PART_MAX)))
++	      sizeof(LILO_PARTITION)*PART_MAX)))
+ 		die("Short write on %s",backup_file);
+ 	    if (size < 0) pdie(backup_file);
+ 	    if (close(bck_file) < 0)
+@@ -99,7 +99,7 @@
+ 	      dev_nr & ~PART_MASK);
+ 	    if (lseek(fd,PART_TABLE_OFFSET,0) < 0)
+ 		pdie("lseek partition table");
+-	    if (!(size = write(fd,(char *) part_table,sizeof(struct partition)*
++	    if (!(size = write(fd,(char *) part_table,sizeof(LILO_PARTITION)*
+ 	      PART_MAX))) die("Short write on partition table");
+ 	    if (size < 0) pdie("write partition table");
+ 	}

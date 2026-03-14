@@ -35,28 +35,13 @@
 
 static inline int find_first_zero_bit (unsigned long * addr, unsigned size)
 {
-	int res;
+	unsigned i;
 
-	if (!size)
-		return 0;
-	__asm__("
-		cld
-		movl $-1,%%eax
-		repe; scasl
-		je 1f
-		subl $4,%%edi
-		movl (%%edi),%%eax
-		notl %%eax
-		bsfl %%eax,%%edx
-		jmp 2f
-1:		xorl %%edx,%%edx
-2:		subl %%ebx,%%edi
-		shll $3,%%edi
-		addl %%edi,%%edx"
-		: "=d" (res)
-		: "c" ((size + 31) >> 5), "D" (addr), "b" (addr)
-		: "ax", "bx", "cx", "di");
-	return res;
+	for (i = 0; i < size; i++) {
+		if (!(addr[i >> 5] & (1UL << (i & 31))))
+			return i;
+	}
+	return size;
 }
 
 static struct ext2_group_desc * get_group_desc (struct super_block * sb,

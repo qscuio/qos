@@ -1,0 +1,14 @@
+--- a/lilo.c
++++ b/lilo.c
+@@ -11,7 +11,10 @@
+ #include <errno.h>
+ #include <sys/stat.h>
+
+-#include <asm/page.h>
++/* asm/page.h is not available on many modern distros. */
++#ifndef PAGE_SIZE
++#define PAGE_SIZE 4096UL
++#endif
+
+ #include "config.h"
+ #include "common.h"

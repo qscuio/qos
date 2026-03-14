@@ -14,27 +14,31 @@
 
 #include <asm/bitops.h>
 
-#define clear_block(addr) \
-__asm__("cld\n\t" \
-	"rep\n\t" \
-	"stosl" \
-	: \
-	:"a" (0),"c" (BLOCK_SIZE/4),"D" ((long) (addr)):"cx","di")
+static inline void clear_block(void *addr)
+{
+	memset(addr, 0, BLOCK_SIZE);
+}
 
-#define find_first_zero(addr) ({ \
-int __res; \
-__asm__("cld\n" \
-	"1:\tlodsl\n\t" \
-	"notl %%eax\n\t" \
-	"bsfl %%eax,%%edx\n\t" \
-	"jne 2f\n\t" \
-	"addl $32,%%ecx\n\t" \
-	"cmpl $8192,%%ecx\n\t" \
-	"jl 1b\n\t" \
-	"xorl %%edx,%%edx\n" \
-	"2:\taddl %%edx,%%ecx" \
-	:"=c" (__res):"0" (0),"S" (addr):"ax","dx","si"); \
-__res;})
+static inline int find_first_zero(const void *addr)
+{
+	const unsigned long *p = (const unsigned long *)addr;
+	int base = 0;
+	int i;
+
+	for (i = 0; i < BLOCK_SIZE / sizeof(unsigned long); i++, base += 8 * sizeof(unsigned long)) {
+		unsigned long v = ~p[i];
+		int b;
+
+		if (!v)
+			continue;
+		for (b = 0; b < 8 * sizeof(unsigned long); b++) {
+			if (v & (1UL << b))
+				return base + b;
+		}
+	}
+
+	return 8 * BLOCK_SIZE;
+}
 
 static int nibblemap[] = { 0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4 };
 

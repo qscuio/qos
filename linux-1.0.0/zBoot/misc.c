@@ -50,8 +50,11 @@ unsigned outcnt;
 unsigned insize;
 unsigned inptr;
 
-extern char input_data[];
-extern int input_len;
+extern unsigned char binary_piggy_bin_gz_start[];
+extern unsigned char binary_piggy_bin_gz_end[];
+
+#define input_data ((char *)binary_piggy_bin_gz_start)
+#define input_len ((int)(binary_piggy_bin_gz_end - binary_piggy_bin_gz_start))
 
 int input_ptr;
 
@@ -150,12 +153,25 @@ __ptr_t memset(__ptr_t s, int c, size_t n)
 }
 
 __ptr_t memcpy(__ptr_t __dest, __const __ptr_t __src,
-			    size_t __n)
+				    size_t __n)
 {
 	int i;
 	char *d = (char *)__dest, *s = (char *)__src;
 
 	for (i=0;i<__n;i++) d[i] = s[i];
+}
+
+int memcmp(__const __ptr_t __s1, __const __ptr_t __s2, size_t __n)
+{
+	int i;
+	const unsigned char *a = (const unsigned char *)__s1;
+	const unsigned char *b = (const unsigned char *)__s2;
+
+	for (i = 0; i < __n; i++) {
+		if (a[i] != b[i])
+			return (int)a[i] - (int)b[i];
+	}
+	return 0;
 }
 
 extern ulg crc_32_tab[];   /* crc table, defined below */
@@ -207,7 +223,7 @@ int fill_inbuf()
     insize = 0;
     do {
 	len = INBUFSIZ-insize;
-	if (len > (input_len-input_ptr+1)) len=input_len-input_ptr+1;
+	if (len > (input_len-input_ptr)) len=input_len-input_ptr;
         if (len == 0 || len == EOF) break;
 
         for (i=0;i<len;i++) inbuf[insize+i] = input_data[input_ptr+i];

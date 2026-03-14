@@ -32,88 +32,44 @@
 
 #include <asm/bitops.h>
 
-#define clear_block(addr,size) \
-	__asm__("cld\n\t" \
-		"rep\n\t" \
-		"stosl" \
-		: \
-		:"a" (0), "c" (size / 4), "D" ((long) (addr)) \
-		:"cx", "di")
+#define clear_block(addr,size) memset((addr), 0, (size))
 
 #define in_range(b, first, len)		((b) >= (first) && (b) <= (first) + (len) - 1)
 
 static inline int find_first_zero_bit (unsigned long * addr, unsigned size)
 {
-	int res;
+	unsigned i;
 
-	if (!size)
-		return 0;
-	__asm__("
-		cld
-		movl $-1,%%eax
-		repe; scasl
-		je 1f
-		subl $4,%%edi
-		movl (%%edi),%%eax
-		notl %%eax
-		bsfl %%eax,%%edx
-		jmp 2f
-1:		xorl %%edx,%%edx
-2:		subl %%ebx,%%edi
-		shll $3,%%edi
-		addl %%edi,%%edx"
-		:"=d" (res)
-		:"c" ((size + 31) >> 5), "D" (addr), "b" (addr)
-		:"ax", "bx", "cx", "di");
-	return res;
+	for (i = 0; i < size; i++) {
+		if (!(addr[i >> 5] & (1UL << (i & 31))))
+			return i;
+	}
+	return size;
 }
 
 static inline int find_next_zero_bit (unsigned long * addr, int size,
 				      int offset)
 {
-	unsigned long * p = ((unsigned long *) addr) + (offset >> 5);
-	int set = 0, bit = offset & 31, res;
-	
-	if (bit) {
-		/*
-		 * Look for zero in first byte
-		 */
-		__asm__("
-			bsfl %1,%0
-			jne 1f
-			movl $32, %0
-1:			"
-			: "=r" (set)
-			: "r" (~(*p >> bit)));
-		if (set < (32 - bit))
-			return set + offset;
-		set = 32 - bit;
-		p++;
+	int i;
+
+	for (i = offset; i < size; i++) {
+		if (!(addr[i >> 5] & (1UL << (i & 31))))
+			return i;
 	}
-	/*
-	 * No zero yet, search remaining full bytes for a zero
-	 */
-	res = find_first_zero_bit (p, size - 32 * (p - addr));
-	return (offset + set + res);
+	return size;
 }
 
 static inline char * find_first_zero_byte (char * addr, int size)
 {
-	char *res;
+	int i;
 
 	if (!size)
 		return 0;
-	__asm__("
-		cld
-		mov $0,%%eax
-		repnz; scasb
-		jnz 1f
-		dec %%edi
-1:		"
-		: "=D" (res)
-		: "0" (addr), "c" (size)
-		: "ax");
-	return res;
+	for (i = 0; i < size; i++) {
+		if (!addr[i])
+			return addr + i;
+	}
+	return addr + size;
 }
 
 static struct ext2_group_desc * get_group_desc (struct super_block * sb,

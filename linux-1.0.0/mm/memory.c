@@ -61,7 +61,16 @@ int nr_secondary_pages = 0;
 unsigned long secondary_page_list = 0;
 
 #define copy_page(from,to) \
-__asm__("cld ; rep ; movsl": :"S" (from),"D" (to),"c" (1024):"cx","di","si")
+do { \
+	unsigned long __from, __to, __count; \
+	__from = (unsigned long) (from); \
+	__to = (unsigned long) (to); \
+	__count = 1024; \
+	__asm__ __volatile__("cld ; rep ; movsl" \
+		: "+S" (__from), "+D" (__to), "+c" (__count) \
+		: \
+		: "memory"); \
+} while (0)
 
 unsigned short * mem_map = NULL;
 
@@ -939,36 +948,33 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long error_code)
 unsigned long __bad_pagetable(void)
 {
 	extern char empty_bad_page_table[PAGE_SIZE];
+	unsigned long *p = (unsigned long *)empty_bad_page_table;
+	int i;
 
-	__asm__ __volatile__("cld ; rep ; stosl":
-		:"a" (BAD_PAGE + PAGE_TABLE),
-		 "D" ((long) empty_bad_page_table),
-		 "c" (PTRS_PER_PAGE)
-		:"di","cx");
+	for (i = 0; i < PTRS_PER_PAGE; i++)
+		p[i] = BAD_PAGE + PAGE_TABLE;
 	return (unsigned long) empty_bad_page_table;
 }
 
 unsigned long __bad_page(void)
 {
 	extern char empty_bad_page[PAGE_SIZE];
+	unsigned long *p = (unsigned long *)empty_bad_page;
+	int i;
 
-	__asm__ __volatile__("cld ; rep ; stosl":
-		:"a" (0),
-		 "D" ((long) empty_bad_page),
-		 "c" (PTRS_PER_PAGE)
-		:"di","cx");
+	for (i = 0; i < PTRS_PER_PAGE; i++)
+		p[i] = 0;
 	return (unsigned long) empty_bad_page;
 }
 
 unsigned long __zero_page(void)
 {
 	extern char empty_zero_page[PAGE_SIZE];
+	unsigned long *p = (unsigned long *)empty_zero_page;
+	int i;
 
-	__asm__ __volatile__("cld ; rep ; stosl":
-		:"a" (0),
-		 "D" ((long) empty_zero_page),
-		 "c" (PTRS_PER_PAGE)
-		:"di","cx");
+	for (i = 0; i < PTRS_PER_PAGE; i++)
+		p[i] = 0;
 	return (unsigned long) empty_zero_page;
 }
 

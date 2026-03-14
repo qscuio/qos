@@ -10,6 +10,20 @@
 
 ---
 
+## Execution Snapshot (2026-03-13)
+
+- [x] Task 1 complete (`67c8cf2`): scaffolded userspace tree, manifest, and ignores.
+- [x] Task 2 complete (`0532a71`): added failing Linux1 pytest coverage.
+- [x] Task 3 complete (`008aa15`): added fetch + provenance scripts and pinned source hashes.
+- [x] Task 4 complete (`3f7adf3`): vendored Linux 1.0.0 source and compatibility patch path.
+- [ ] Task 5 in progress (working tree): kernel/LILO/userspace build scripts + syscall-only userspace sources.
+- [ ] Task 6 pending: deterministic disk assembly and QEMU runner.
+- [ ] Task 7 pending: root Makefile/README integration and provenance test wiring.
+- [ ] Task 8 pending: full Linux1 green run and provenance contract verification.
+- [ ] Task 9 pending: final branch validation and merge/PR handoff.
+
+---
+
 ## Chunk 1: Baseline Files, Manifest, and RED Tests
 
 ### Task 1: Add Linux1 source/ignore scaffolding

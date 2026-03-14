@@ -524,60 +524,29 @@ tcp_check(struct tcphdr *th, int len,
 	  unsigned long saddr, unsigned long daddr)
 {     
   unsigned long sum;
-   
-  if (saddr == 0) saddr = my_addr();
+  unsigned char *ptr = (unsigned char *)th;
+
+  if (saddr == 0)
+	saddr = my_addr();
   print_th(th);
-  __asm__("\t addl %%ecx,%%ebx\n"
-	  "\t adcl %%edx,%%ebx\n"
-	  "\t adcl $0, %%ebx\n"
-	  : "=b"(sum)
-	  : "0"(daddr), "c"(saddr), "d"((ntohs(len) << 16) + IPPROTO_TCP*256)
-	  : "cx","bx","dx" );
-   
-  if (len > 3) {
-	__asm__("\tclc\n"
-		"1:\n"
-		"\t lodsl\n"
-		"\t adcl %%eax, %%ebx\n"
-		"\t loop 1b\n"
-		"\t adcl $0, %%ebx\n"
-		: "=b"(sum) , "=S"(th)
-		: "0"(sum), "c"(len/4) ,"1"(th)
-		: "ax", "cx", "bx", "si" );
+
+  sum = (saddr & 0xffff) + (saddr >> 16);
+  sum += (daddr & 0xffff) + (daddr >> 16);
+  sum += (unsigned short)(IPPROTO_TCP << 8);
+  sum += (unsigned short)ntohs((unsigned short)len);
+
+  while (len > 1) {
+	sum += *(unsigned short *)ptr;
+	ptr += 2;
+	len -= 2;
   }
-   
-  /* Convert from 32 bits to 16 bits. */
-  __asm__("\t movl %%ebx, %%ecx\n"
-	  "\t shrl $16,%%ecx\n"
-	  "\t addw %%cx, %%bx\n"
-	  "\t adcw $0, %%bx\n"
-	  : "=b"(sum)
-	  : "0"(sum)
-	  : "bx", "cx");
-   
-  /* Check for an extra word. */
-  if ((len & 2) != 0) {
-	__asm__("\t lodsw\n"
-		"\t addw %%ax,%%bx\n"
-		"\t adcw $0, %%bx\n"
-		: "=b"(sum), "=S"(th)
-		: "0"(sum) ,"1"(th)
-		: "si", "ax", "bx");
-  }
-   
-  /* Now check for the extra byte. */
-  if ((len & 1) != 0) {
-	__asm__("\t lodsb\n"
-		"\t movb $0,%%ah\n"
-		"\t addw %%ax,%%bx\n"
-		"\t adcw $0, %%bx\n"
-		: "=b"(sum)
-		: "0"(sum) ,"S"(th)
-		: "si", "ax", "bx");
-  }
-   
-  /* We only want the bottom 16 bits, but we never cleared the top 16. */
-  return((~sum) & 0xffff);
+  if (len)
+	sum += *ptr;
+
+  while (sum >> 16)
+	sum = (sum & 0xffff) + (sum >> 16);
+
+  return (unsigned short)(~sum);
 }
 
 

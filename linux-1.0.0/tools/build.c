@@ -28,6 +28,7 @@
 #include <sys/sysmacros.h>
 #include <unistd.h>	/* contains read/write */
 #include <fcntl.h>
+#include <stdint.h>
 #include <linux/config.h>
 #include <linux/a.out.h>
 
@@ -46,12 +47,12 @@
 #define STRINGIFY(x) #x
 
 typedef union {
-	long l;
-	short s[2];
+	uint32_t l;
+	uint16_t s[2];
 	char b[4];
 } conv;
 
-long intel_long(long l)
+uint32_t intel_long(uint32_t l)
 {
 	conv t;
 
@@ -62,7 +63,7 @@ long intel_long(long l)
 	return t.l;
 }
 
-short intel_short(short l)
+uint16_t intel_short(uint16_t l)
 {
 	conv t;
 
@@ -84,7 +85,7 @@ void usage(void)
 
 int main(int argc, char ** argv)
 {
-	int i,c,id, sz;
+	int i,c,id, sz, raw_system = 0;
 	unsigned long sys_size;
 	char buf[1024];
 	struct exec *ex = (struct exec *)buf;
@@ -122,17 +123,17 @@ int main(int argc, char ** argv)
 		die("Unable to open 'boot'");
 	if (read(id,buf,MINIX_HEADER) != MINIX_HEADER)
 		die("Unable to read header of 'boot'");
-	if (((long *) buf)[0]!=intel_long(0x04100301))
+	if (((uint32_t *) buf)[0]!=intel_long(0x04100301))
 		die("Non-Minix header of 'boot'");
-	if (((long *) buf)[1]!=intel_long(MINIX_HEADER))
+	if (((uint32_t *) buf)[1]!=intel_long(MINIX_HEADER))
 		die("Non-Minix header of 'boot'");
-	if (((long *) buf)[3] != 0)
+	if (((uint32_t *) buf)[3] != 0)
 		die("Illegal data segment in 'boot'");
-	if (((long *) buf)[4] != 0)
+	if (((uint32_t *) buf)[4] != 0)
 		die("Illegal bss in 'boot'");
-	if (((long *) buf)[5] != 0)
+	if (((uint32_t *) buf)[5] != 0)
 		die("Non-Minix header of 'boot'");
-	if (((long *) buf)[7] != 0)
+	if (((uint32_t *) buf)[7] != 0)
 		die("Illegal symbol table in 'boot'");
 	i=read(id,buf,sizeof buf);
 	fprintf(stderr,"Boot sector %d bytes.\n",i);
@@ -151,17 +152,17 @@ int main(int argc, char ** argv)
 		die("Unable to open 'setup'");
 	if (read(id,buf,MINIX_HEADER) != MINIX_HEADER)
 		die("Unable to read header of 'setup'");
-	if (((long *) buf)[0]!=intel_long(0x04100301))
+	if (((uint32_t *) buf)[0]!=intel_long(0x04100301))
 		die("Non-Minix header of 'setup'");
-	if (((long *) buf)[1]!=intel_long(MINIX_HEADER))
+	if (((uint32_t *) buf)[1]!=intel_long(MINIX_HEADER))
 		die("Non-Minix header of 'setup'");
-	if (((long *) buf)[3] != 0)
+	if (((uint32_t *) buf)[3] != 0)
 		die("Illegal data segment in 'setup'");
-	if (((long *) buf)[4] != 0)
+	if (((uint32_t *) buf)[4] != 0)
 		die("Illegal bss in 'setup'");
-	if (((long *) buf)[5] != 0)
+	if (((uint32_t *) buf)[5] != 0)
 		die("Non-Minix header of 'setup'");
-	if (((long *) buf)[7] != 0)
+	if (((uint32_t *) buf)[7] != 0)
 		die("Illegal symbol table in 'setup'");
 	for (i=0 ; (c=read(id,buf,sizeof buf))>0 ; i+=c )
 		if (write(1,buf,c)!=c)
@@ -188,14 +189,22 @@ int main(int argc, char ** argv)
 		die("Unable to open 'system'");
 	if (read(id,buf,GCC_HEADER) != GCC_HEADER)
 		die("Unable to read header of 'system'");
-	if (N_MAGIC(*ex) != ZMAGIC)
-		die("Non-GCC header of 'system'");
-	fprintf(stderr,"System is %d kB (%d kB code, %d kB data and %d kB bss)\n",
-		(ex->a_text+ex->a_data+ex->a_bss)/1024,
-		ex->a_text /1024,
-		ex->a_data /1024,
-		ex->a_bss  /1024);
-	sz = N_SYMOFF(*ex) - GCC_HEADER + 4;
+	if (N_MAGIC(*ex) == ZMAGIC) {
+		fprintf(stderr,"System is %d kB (%d kB code, %d kB data and %d kB bss)\n",
+			(ex->a_text+ex->a_data+ex->a_bss)/1024,
+			ex->a_text /1024,
+			ex->a_data /1024,
+			ex->a_bss  /1024);
+		sz = N_SYMOFF(*ex) - GCC_HEADER + 4;
+	} else {
+		raw_system = 1;
+		if (fstat(id, &sb))
+			die("Unable to stat 'system'");
+		if (lseek(id, 0, SEEK_SET) < 0)
+			die("Unable to seek 'system'");
+		sz = sb.st_size;
+		fprintf(stderr, "System is %d kB (raw image)\n", sz/1024);
+	}
 	sys_size = (sz + 15) / 16;
 	if (sys_size > SYS_SIZE)
 		die("System is too big");
@@ -206,11 +215,11 @@ int main(int argc, char ** argv)
 		if (l > sizeof(buf))
 			l = sizeof(buf);
 		if ((n=read(id, buf, l)) != l) {
-			if (n == -1) 
+			if (n == -1)
 				perror(argv[1]);
 			else
 				fprintf(stderr, "Unexpected EOF\n");
-			die("Can't read 'system'");
+			die(raw_system ? "Can't read raw 'system'" : "Can't read 'system'");
 		}
 		if (write(1, buf, l) != l)
 			die("Write failed");

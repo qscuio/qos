@@ -1,0 +1,40 @@
+--- a/common.h
++++ b/common.h
+@@ -7,13 +7,36 @@
+ #define COMMON_H
+
+ #include <sys/stat.h>
+-#include <linux/genhd.h>
++#include <sys/types.h>
++
++#ifndef PAGE_SIZE
++#define PAGE_SIZE 4096UL
++#endif
++
++#ifndef MAJOR
++#include <sys/sysmacros.h>
++#define MAJOR(dev) major(dev)
++#define MINOR(dev) minor(dev)
++#endif
+
+ #include "lilo.h"
+
+
+ #define O_NOACCESS 3  /* open a file for "no access" */
+
++typedef struct lilo_partition {
++    unsigned char boot_ind;
++    unsigned char head;
++    unsigned char sector;
++    unsigned char cyl;
++    unsigned char sys_ind;
++    unsigned char end_head;
++    unsigned char end_sector;
++    unsigned char end_cyl;
++    unsigned int start_sect;
++    unsigned int nr_sects;
++} __attribute__((packed)) LILO_PARTITION;
++
+
+ typedef struct {
+     unsigned char sector,track; /* CX */

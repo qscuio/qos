@@ -52,8 +52,13 @@ void grow_files(void)
 
 	nr_files+=i= PAGE_SIZE/sizeof(struct file);
 
-	if (!first_file)
-		file->f_next = file->f_prev = first_file = file++, i--;
+	if (!first_file) {
+		first_file = file;
+		file->f_next = file;
+		file->f_prev = file;
+		file++;
+		i--;
+	}
 
 	for (; i ; i--)
 		insert_file_free(file++);

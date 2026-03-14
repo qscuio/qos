@@ -211,6 +211,8 @@ asmlinkage int sys_setup(void * BIOS)
 		
 	if (ramdisk_size)
 		rd_load();
+	printk("SETUP: calling mount_root\n");
 	mount_root();
+	printk("SETUP: mount_root returned\n");
 	return (0);
 }

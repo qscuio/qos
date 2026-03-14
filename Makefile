@@ -1,7 +1,7 @@
 ARCHES := x86_64 aarch64
 ARCH_GOAL := $(firstword $(filter $(ARCHES),$(MAKECMDGOALS)))
 
-.PHONY: c rust test-all xv6 xv6-clean test-xv6 clean $(ARCHES)
+.PHONY: c rust test-all xv6 xv6-clean test-xv6 linux1 linux1-curses test-linux1 linux1-clean clean $(ARCHES)
 
 c:
 	@if [ -z "$(ARCH_GOAL)" ]; then \
@@ -33,6 +33,28 @@ xv6-clean:
 
 test-xv6:
 	@pytest tests/test_xv6.py -v
+
+linux1:
+	@bash scripts/fetch_linux1_sources.sh
+	@bash scripts/build_linux1_kernel.sh
+	@bash scripts/build_linux1_userspace.sh
+	@bash scripts/build_linux1_lilo.sh
+	@bash scripts/mk_linux1_disk.sh
+	@bash scripts/run_linux1_qemu.sh
+
+linux1-curses:
+	@bash scripts/fetch_linux1_sources.sh
+	@bash scripts/build_linux1_kernel.sh
+	@bash scripts/build_linux1_userspace.sh
+	@bash scripts/build_linux1_lilo.sh
+	@bash scripts/mk_linux1_disk.sh
+	@bash scripts/run_linux1_curses.sh
+
+test-linux1:
+	@pytest tests/test_linux1.py -v
+
+linux1-clean:
+	@rm -rf build/linux1
 
 clean:
 	@$(MAKE) -C c-os clean

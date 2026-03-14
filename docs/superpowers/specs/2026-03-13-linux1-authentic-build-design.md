@@ -1,7 +1,7 @@
 # Linux 1.0.0 Authentic Build-and-Boot Design
 
 **Date:** 2026-03-13
-**Status:** Approved for implementation planning
+**Status:** Implementation in progress (`feature/linux1-authentic`)
 
 ## Overview
 
@@ -313,3 +313,82 @@ LILO provenance scope for done criteria:
 - stage pipeline validation (kernel build first, then disk assembly, then boot)
 - capture complete boot logs for fast diagnosis
 - keep smoke tests focused on deterministic markers
+
+## Disk Geometry Contract
+
+Disk image layout is fixed for deterministic assembly and test replay.
+
+- Image path: `build/linux1/images/linux1-disk.img`
+- Image size: 64 MiB
+- Partition table type: MBR (msdos)
+- Partitions:
+  - primary partition 1 (`Linux`, bootable), ext2 rootfs
+- Kernel root device contract: rootfs partition must be visible to Linux 1.0.0 as `/dev/hda1`.
+
+Layout determinism rules:
+
+- `mk_linux1_disk.sh` writes the same partition start/size values on every run.
+- The script prints final partition geometry in machine-parsable form for debugging.
+- Geometry mismatch against expected constants is a hard failure.
+
+## Kernel Config and Boot Argument Contract
+
+Kernel build output must encode a stable boot profile compatible with the disk path.
+
+- Kernel image target remains `build/linux1/kernel/vmlinuz-1.0.0`.
+- The kernel config used for builds is persisted under `build/linux1/kernel/.config.final` for reproducibility checks.
+- Required built-in support includes:
+  - ext2 root filesystem
+  - IDE/ATA disk path expected by QEMU i386 machine type
+  - serial console support for `ttyS0` output capture
+- Boot argument baseline passed through LILO:
+  - `root=/dev/hda1 ro console=ttyS0`
+
+If compatibility patches require config toggles beyond this baseline, the delta must be documented in `patches/linux-1.0.0/README.md`.
+
+## LILO Install Contract
+
+LILO installation is treated as a deterministic build artifact step, not an interactive setup.
+
+- `mk_linux1_disk.sh` generates `build/linux1/lilo/lilo.conf.generated`.
+- Required LILO config semantics:
+  - install to MBR of the target disk image
+  - set default label `linux1`
+  - configure serial output for test capture
+  - point image entry at `/boot/vmlinuz-1.0.0`
+  - pass kernel append string with `console=ttyS0`
+- The script stores LILO install logs at `build/linux1/logs/lilo-install.log`.
+- Missing `LILO` boot banner in serial output is treated as a bootloader-stage failure, not a generic boot failure.
+
+## CI Privilege Split
+
+Linux1 validation is split into unprivileged and privileged lanes so CI failures are easy to localize.
+
+- Unprivileged lane:
+  - fetch + checksum verification
+  - kernel build
+  - userspace build
+  - provenance verification
+- Privileged lane:
+  - disk assembly (`mk_linux1_disk.sh`)
+  - BIOS disk boot (`run_linux1_qemu.sh`)
+  - marker-order smoke assertions
+
+Both lanes publish `build/linux1/logs/` artifacts on failure.
+
+## Diagnostics and Failure Forensics
+
+Minimum logs/artifacts retained for every Linux1 run:
+
+- `build/linux1/logs/fetch.log`
+- `build/linux1/logs/kernel-build.log`
+- `build/linux1/logs/lilo-build.log`
+- `build/linux1/logs/lilo-install.log`
+- `build/linux1/logs/boot.log`
+- `build/linux1/logs/markers.json` (ordered marker positions and timeout metadata)
+
+When marker assertions fail, tests print:
+
+- first missing marker name
+- full ordered marker list
+- tail section of `boot.log` (at least last 200 lines)

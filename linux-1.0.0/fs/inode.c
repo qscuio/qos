@@ -98,8 +98,13 @@ void grow_inodes(void)
 	nr_inodes += i;
 	nr_free_inodes += i;
 
-	if (!first_inode)
-		inode->i_next = inode->i_prev = first_inode = inode++, i--;
+	if (!first_inode) {
+		first_inode = inode;
+		inode->i_next = inode;
+		inode->i_prev = inode;
+		inode++;
+		i--;
+	}
 
 	for ( ; i ; i-- )
 		insert_inode_free(inode++);

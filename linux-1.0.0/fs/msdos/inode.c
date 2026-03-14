@@ -153,6 +153,8 @@ struct super_block *msdos_read_super(struct super_block *s,void *data,
 	gid_t gid;
 	int umask;
 
+	printk("MSDOS: probing dev %d/%d\n", MAJOR(s->s_dev), MINOR(s->s_dev));
+
 	if (!parse_options((char *) data,&check,&conversion,&uid,&gid,&umask,
 	    &debug,&fat,&quiet)) {
 		s->s_dev = 0;

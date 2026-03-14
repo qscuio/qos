@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <a.out.h>
+#include <stdlib.h>
 
 int main(int argc, char *argv[])
 {
@@ -33,7 +34,7 @@ int main(int argc, char *argv[])
 
 
 	len = 0;
-	while ((n = read(0, &tmp_buf[len], sizeof(tmp_buf)-len+1)) > 0)
+	while ((n = read(0, &tmp_buf[len], sizeof(tmp_buf)-len)) > 0)
 	      len += n;
 
 	if (n==-1)
