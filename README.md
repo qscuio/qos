@@ -61,12 +61,18 @@ make linux1
 
 This runs:
 
-1. `scripts/fetch_linux1_sources.sh`
-2. `scripts/build_linux1_kernel.sh`
-3. `scripts/build_linux1_userspace.sh`
-4. `scripts/build_linux1_lilo.sh`
-5. `scripts/mk_linux1_disk.sh`
-6. `scripts/run_linux1_qemu.sh`
+1. `scripts/linux1/fetch_sources.sh`
+2. `scripts/linux1/build_kernel.sh`
+3. `scripts/linux1/build_userspace.sh`
+4. `scripts/linux1/build_lilo.sh`
+5. `scripts/linux1/mk_disk.sh`
+6. `scripts/linux1/run_qemu.sh`
+
+Linux1-owned assets now live under `linux-1.0.0/`:
+
+- userspace sources: `linux-1.0.0/userspace/`
+- source manifest: `linux-1.0.0/manifests/linux1-sources.lock`
+- LILO patch stack: `linux-1.0.0/patches/lilo/`
 
 Artifacts:
 

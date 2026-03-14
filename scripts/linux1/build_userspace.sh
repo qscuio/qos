@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$ROOT/linux1-userspace/src"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SRC="$ROOT/linux-1.0.0/userspace/src"
 OUT="$ROOT/build/linux1/rootfs"
-LINKER_SCRIPT="$ROOT/scripts/linux1_userspace.ld"
+LINKER_SCRIPT="$ROOT/scripts/linux1/userspace.ld"
 TOOLPREFIX="${TOOLPREFIX:-i686-linux-gnu-}"
 AS="${AS:-${TOOLPREFIX}as}"
 LD="${LD:-${TOOLPREFIX}ld}"

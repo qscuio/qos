@@ -37,20 +37,20 @@ This design favors historical runtime behavior while allowing minimal build-comp
 ```text
 qos/
 ├── linux-1.0.0/                         # committed kernel source (local, editable)
-├── linux1-userspace/                    # simple in-repo userspace sources
+├── linux-1.0.0/userspace/                    # simple in-repo userspace sources
 ├── patches/
 │   ├── linux-1.0.0/                     # compatibility patch set for kernel build
 │   └── lilo/                            # compatibility patch set for lilo build/install
 ├── manifests/
 │   └── linux1-sources.lock              # pinned URL + SHA256 for fetched artifacts
 ├── scripts/
-│   ├── fetch_linux1_sources.sh          # fetch pinned external sources + verify SHA256
-│   ├── verify_linux1_provenance.sh      # rebuild upstream+patches and compare to committed tree
-│   ├── build_linux1_kernel.sh           # build Linux 1.0.0 with compatibility flags/patches
-│   ├── build_linux1_lilo.sh             # build lilo from pinned source + patches
-│   ├── build_linux1_userspace.sh        # build minimal static userspace
-│   ├── mk_linux1_disk.sh                # create partitioned disk, ext2 rootfs, install bootloader
-│   └── run_linux1_qemu.sh               # run BIOS disk boot in qemu-system-i386
+│   ├── scripts/linux1/fetch_sources.sh          # fetch pinned external sources + verify SHA256
+│   ├── scripts/linux1/verify_provenance.sh      # rebuild upstream+patches and compare to committed tree
+│   ├── scripts/linux1/build_kernel.sh           # build Linux 1.0.0 with compatibility flags/patches
+│   ├── scripts/linux1/build_lilo.sh             # build lilo from pinned source + patches
+│   ├── scripts/linux1/build_userspace.sh        # build minimal static userspace
+│   ├── scripts/linux1/mk_disk.sh                # create partitioned disk, ext2 rootfs, install bootloader
+│   └── scripts/linux1/run_qemu.sh               # run BIOS disk boot in qemu-system-i386
 ├── tests/
 │   └── test_linux1.py                   # build + authentic boot smoke tests
 └── Makefile                             # linux1/test-linux1/linux1-clean integration
@@ -72,8 +72,8 @@ External sources required for authentic boot flow (for example LILO source tarba
 
 Provenance contract:
 - `linux-1.0.0/` is the canonical local learning tree.
-- `scripts/verify_linux1_provenance.sh` must reproduce a clean upstream extraction, apply the patch stack, and verify tree equivalence to committed `linux-1.0.0/` (ignoring generated files).
-- The same provenance verification must cover LILO: pinned source archive, optional `patches/lilo/*.patch`, and deterministic artifact checks for `build_linux1_lilo.sh` outputs.
+- `scripts/linux1/verify_provenance.sh` must reproduce a clean upstream extraction, apply the patch stack, and verify tree equivalence to committed `linux-1.0.0/` (ignoring generated files).
+- The same provenance verification must cover LILO: pinned source archive, optional `linux-1.0.0/patches/lilo/*.patch`, and deterministic artifact checks for `scripts/linux1/build_lilo.sh` outputs.
 - The verification command is part of CI for Linux1-related changes.
 
 ## Compatibility Patch Policy
@@ -108,7 +108,7 @@ Authentic boot requirement: no direct `qemu -kernel` in the primary smoke path.
 Orchestration contract:
 
 - `make linux1` is the single orchestrator and invokes scripts in strict order.
-- Each pipeline step maps to exactly one primary script (`fetch` -> `fetch_linux1_sources.sh`, `build-kernel` -> `build_linux1_kernel.sh`, `build-lilo` -> `build_linux1_lilo.sh`, and so on).
+- Each pipeline step maps to exactly one primary script (`fetch` -> `scripts/linux1/fetch_sources.sh`, `build-kernel` -> `scripts/linux1/build_kernel.sh`, `build-lilo` -> `scripts/linux1/build_lilo.sh`, and so on).
 - On failure, the orchestrator stops immediately and reports the failing step name.
 - Re-run semantics are step-local: rerunning after failure restarts from the failed step with already-produced prerequisite artifacts.
 
@@ -116,29 +116,29 @@ Orchestration contract:
 
 Each script has a strict interface so units are independently testable and composable.
 
-- `fetch_linux1_sources.sh`
-  - Inputs: `manifests/linux1-sources.lock`
+- `scripts/linux1/fetch_sources.sh`
+  - Inputs: `linux-1.0.0/manifests/linux1-sources.lock`
   - Outputs: verified archives under `build/linux1/sources/`
   - Exit codes: non-zero on download/checksum/manifest parse failure
-- `build_linux1_kernel.sh`
-  - Inputs: `linux-1.0.0/` and optional `patches/linux-1.0.0/*.patch`
+- `scripts/linux1/build_kernel.sh`
+  - Inputs: `linux-1.0.0/` and optional `linux-1.0.0/patches/kernel/*.patch`
   - Outputs: kernel image under `build/linux1/kernel/`
   - Env: `LINUX1_JOBS` optional parallelism
   - Exit codes: non-zero on patch or build failure
-- `build_linux1_lilo.sh`
-  - Inputs: pinned LILO source from `build/linux1/sources/` and optional `patches/lilo/*.patch`
+- `scripts/linux1/build_lilo.sh`
+  - Inputs: pinned LILO source from `build/linux1/sources/` and optional `linux-1.0.0/patches/lilo/*.patch`
   - Outputs: LILO install artifacts under `build/linux1/lilo/`
   - Exit codes: non-zero on patch/configure/build failure
-- `build_linux1_userspace.sh`
-  - Inputs: `linux1-userspace/`
+- `scripts/linux1/build_userspace.sh`
+  - Inputs: `linux-1.0.0/userspace/`
   - Outputs: staged rootfs files under `build/linux1/rootfs/`
   - Build mode: syscall-only i386 static binaries (`-m32 -nostdlib -static`, no host glibc dependency)
   - Exit codes: non-zero on compile/link/staging failure
-- `mk_linux1_disk.sh`
+- `scripts/linux1/mk_disk.sh`
   - Inputs: built kernel + staged rootfs + fetched/built LILO artifacts
   - Outputs: `build/linux1/images/linux1-disk.img`
   - Exit codes: non-zero on partition/fs/bootloader install failure
-- `run_linux1_qemu.sh`
+- `scripts/linux1/run_qemu.sh`
   - Inputs: disk image path
   - Outputs: serial log `build/linux1/logs/boot.log`
   - Exit codes: non-zero on launch/timeout/marker failure
@@ -181,8 +181,8 @@ Primary marker contract (exact strings):
 
 Serial capture contract:
 
-- `mk_linux1_disk.sh` writes a `lilo.conf` that enables serial output and passes kernel console on `ttyS0`.
-- `run_linux1_qemu.sh` runs in `-nographic -serial stdio` mode and captures merged output to `build/linux1/logs/boot.log`.
+- `scripts/linux1/mk_disk.sh` writes a `lilo.conf` that enables serial output and passes kernel console on `ttyS0`.
+- `scripts/linux1/run_qemu.sh` runs in `-nographic -serial stdio` mode and captures merged output to `build/linux1/logs/boot.log`.
 - Tests read `boot.log` and assert markers in order.
 
 ## Makefile Integration
@@ -247,7 +247,7 @@ Userspace ABI contract:
 
 Ext2 compatibility contract:
 
-- `mk_linux1_disk.sh` must create ext2 with options compatible with Linux 1.0.0 (for example `mke2fs -t ext2 -O none -I 128 -b 1024`).
+- `scripts/linux1/mk_disk.sh` must create ext2 with options compatible with Linux 1.0.0 (for example `mke2fs -t ext2 -O none -I 128 -b 1024`).
 - Script verifies resulting filesystem features and fails if unsupported features are present.
 
 Failure reporting contract:
@@ -281,8 +281,8 @@ Environment lock guidance:
 Privilege model:
 
 - `fetch`, `build-kernel`, and `build-userspace` run unprivileged.
-- `mk_linux1_disk.sh` may require elevated privileges for loop-device setup, partition writes, and bootloader install.
-- `mk_linux1_disk.sh` must detect missing privileges early and emit a single actionable command path (for example rerun with `sudo`).
+- `scripts/linux1/mk_disk.sh` may require elevated privileges for loop-device setup, partition writes, and bootloader install.
+- `scripts/linux1/mk_disk.sh` must detect missing privileges early and emit a single actionable command path (for example rerun with `sudo`).
 
 ## Milestone Definition of Done
 
@@ -327,7 +327,7 @@ Disk image layout is fixed for deterministic assembly and test replay.
 
 Layout determinism rules:
 
-- `mk_linux1_disk.sh` writes the same partition start/size values on every run.
+- `scripts/linux1/mk_disk.sh` writes the same partition start/size values on every run.
 - The script prints final partition geometry in machine-parsable form for debugging.
 - Geometry mismatch against expected constants is a hard failure.
 
@@ -344,13 +344,13 @@ Kernel build output must encode a stable boot profile compatible with the disk p
 - Boot argument baseline passed through LILO:
   - `root=/dev/hda1 ro console=ttyS0`
 
-If compatibility patches require config toggles beyond this baseline, the delta must be documented in `patches/linux-1.0.0/README.md`.
+If compatibility patches require config toggles beyond this baseline, the delta must be documented in `linux-1.0.0/patches/kernel/README.md`.
 
 ## LILO Install Contract
 
 LILO installation is treated as a deterministic build artifact step, not an interactive setup.
 
-- `mk_linux1_disk.sh` generates `build/linux1/lilo/lilo.conf.generated`.
+- `scripts/linux1/mk_disk.sh` generates `build/linux1/lilo/lilo.conf.generated`.
 - Required LILO config semantics:
   - install to MBR of the target disk image
   - set default label `linux1`
@@ -370,8 +370,8 @@ Linux1 validation is split into unprivileged and privileged lanes so CI failures
   - userspace build
   - provenance verification
 - Privileged lane:
-  - disk assembly (`mk_linux1_disk.sh`)
-  - BIOS disk boot (`run_linux1_qemu.sh`)
+  - disk assembly (`scripts/linux1/mk_disk.sh`)
+  - BIOS disk boot (`scripts/linux1/run_qemu.sh`)
   - marker-order smoke assertions
 
 Both lanes publish `build/linux1/logs/` artifacts on failure.

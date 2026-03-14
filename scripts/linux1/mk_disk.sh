@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="$ROOT/build/linux1/images"
 WORK_DIR="$ROOT/build/linux1/work/disk"
 IMG="${LINUX1_DISK_IMAGE:-$OUT_DIR/linux1-disk.img}"

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MANIFEST="$ROOT/manifests/linux1-sources.lock"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+MANIFEST="$ROOT/linux-1.0.0/manifests/linux1-sources.lock"
 KERNEL_TREE="$ROOT/linux-1.0.0"
 LILO_ARTIFACT_DIR="$ROOT/build/linux1/lilo"
 
@@ -52,8 +52,8 @@ if [[ -z "$linux_src_candidate" || ! -d "$linux_src_candidate" ]]; then
   exit 2
 fi
 
-if compgen -G "$ROOT/patches/linux-1.0.0/*.patch" > /dev/null; then
-  for p in "$ROOT"/patches/linux-1.0.0/*.patch; do
+if compgen -G "$ROOT/linux-1.0.0/patches/kernel/*.patch" > /dev/null; then
+  for p in "$ROOT"/linux-1.0.0/patches/kernel/*.patch; do
     patch -d "$linux_src_candidate" -p1 < "$p" >/dev/null
   done
 fi
@@ -70,8 +70,8 @@ if [[ -z "$lilo_src_candidate" || ! -d "$lilo_src_candidate" ]]; then
   exit 2
 fi
 
-if compgen -G "$ROOT/patches/lilo/*.patch" > /dev/null; then
-  for p in "$ROOT"/patches/lilo/*.patch; do
+if compgen -G "$ROOT/linux-1.0.0/patches/lilo/*.patch" > /dev/null; then
+  for p in "$ROOT"/linux-1.0.0/patches/lilo/*.patch; do
     patch -d "$lilo_src_candidate" -p1 < "$p" >/dev/null
   done
 fi

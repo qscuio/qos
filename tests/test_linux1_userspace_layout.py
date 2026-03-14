@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOTFS = ROOT / "build" / "linux1" / "rootfs"
+USPACE_SRC = ROOT / "linux-1.0.0" / "userspace" / "src"
 BINARIES = [
     ROOTFS / "sbin" / "init",
     ROOTFS / "bin" / "sh",
@@ -27,8 +28,9 @@ def _program_headers(path: Path) -> list[str]:
 
 def test_linux1_userspace_segments_are_linux10_elf_loader_friendly():
     timeout_sec = int(os.environ.get("LINUX1_BUILD_TIMEOUT_SEC", "1800"))
+    assert USPACE_SRC.exists(), f"missing linux1 userspace source tree: {USPACE_SRC}"
     result = subprocess.run(
-        ["bash", "scripts/build_linux1_userspace.sh"],
+        ["bash", "scripts/linux1/build_userspace.sh"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

@@ -11,7 +11,7 @@ ZSYSTEM = KDIR / "tools" / "zSystem"
 def test_linux1_kernel_entrypoint_layout():
     timeout_sec = int(os.environ.get("LINUX1_BUILD_TIMEOUT_SEC", "1800"))
     result = subprocess.run(
-        ["bash", "scripts/build_linux1_kernel.sh"],
+        ["bash", "scripts/linux1/build_kernel.sh"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -45,7 +45,7 @@ def test_linux1_kernel_entrypoint_layout():
 def test_linux1_schedule_switch_uses_stable_far_pointer():
     timeout_sec = int(os.environ.get("LINUX1_BUILD_TIMEOUT_SEC", "1800"))
     result = subprocess.run(
-        ["bash", "scripts/build_linux1_kernel.sh"],
+        ["bash", "scripts/linux1/build_kernel.sh"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

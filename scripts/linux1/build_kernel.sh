@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 KDIR="$ROOT/linux-1.0.0"
 OUT="$ROOT/build/linux1/kernel"
 TOOLPREFIX="${TOOLPREFIX:-i686-linux-gnu-}"

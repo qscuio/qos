@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 IMG="${1:-$ROOT/build/linux1/images/linux1-disk.img}"
 MEM_MB="${LINUX1_QEMU_MEM_MB:-64}"
 

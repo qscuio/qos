@@ -36,11 +36,11 @@ def lba_to_chs(lba: int) -> tuple[int, int, int]:
 
 
 def test_linux1_disk_partition_chs_matches_lilo_geometry():
-    run_step("bash", "scripts/fetch_linux1_sources.sh")
-    run_step("bash", "scripts/build_linux1_kernel.sh")
-    run_step("bash", "scripts/build_linux1_userspace.sh")
-    run_step("bash", "scripts/build_linux1_lilo.sh")
-    run_step("bash", "scripts/mk_linux1_disk.sh")
+    run_step("bash", "scripts/linux1/fetch_sources.sh")
+    run_step("bash", "scripts/linux1/build_kernel.sh")
+    run_step("bash", "scripts/linux1/build_userspace.sh")
+    run_step("bash", "scripts/linux1/build_lilo.sh")
+    run_step("bash", "scripts/linux1/mk_disk.sh")
 
     assert DISK.exists(), f"missing disk image: {DISK}"
 

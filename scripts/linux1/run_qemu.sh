@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 IMG="${1:-$ROOT/build/linux1/images/linux1-disk.img}"
 LOG_DIR="$ROOT/build/linux1/logs"
 LOG_FILE="${LINUX1_BOOT_LOG:-$LOG_DIR/boot.log}"
@@ -37,6 +37,7 @@ require_cmd tesseract
 
 rm -f "$LOG_FILE" "$QEMU_STDOUT" "$QEMU_STDERR" "$SERIAL_LOG" \
   "$SCREEN_PPM" "$SCREEN_PNG" "$OCR_PNG" "$OCR_FULL_PNG" "$MONITOR_SOCK"
+touch "$QEMU_STDOUT" "$QEMU_STDERR"
 
 qemu-system-i386 \
   -drive "file=${IMG},format=raw,if=ide" \
@@ -59,7 +60,9 @@ cleanup() {
 trap cleanup EXIT
 
 for _ in $(seq 1 200); do
-  pty_path="$(sed -n 's#char device redirected to \([^ ]*\).*#\1#p' "$QEMU_STDOUT" | tail -n 1)"
+  pty_path="$(
+    sed -n 's#char device redirected to \([^ ]*\).*#\1#p' "$QEMU_STDOUT" 2>/dev/null | tail -n 1
+  )"
   if [[ -n "${pty_path:-}" && -e "$pty_path" && -S "$MONITOR_SOCK" ]]; then
     break
   fi

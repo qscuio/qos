@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MANIFEST="$ROOT/manifests/linux1-sources.lock"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+MANIFEST="$ROOT/linux-1.0.0/manifests/linux1-sources.lock"
 OUTDIR="$ROOT/build/linux1/sources"
 
 mkdir -p "$OUTDIR"

@@ -29,16 +29,16 @@
 ### Task 1: Add Linux1 source/ignore scaffolding
 
 **Files:**
-- Create: `linux1-userspace/README.md`
-- Create: `linux1-userspace/src/init.S`
-- Create: `linux1-userspace/src/sh.S`
-- Create: `linux1-userspace/src/echo.S`
-- Create: `manifests/linux1-sources.lock`
+- Create: `linux-1.0.0/userspace/README.md`
+- Create: `linux-1.0.0/userspace/src/init.S`
+- Create: `linux-1.0.0/userspace/src/sh.S`
+- Create: `linux-1.0.0/userspace/src/echo.S`
+- Create: `linux-1.0.0/manifests/linux1-sources.lock`
 - Modify: `.gitignore`
 
 - [ ] **Step 1: Create pinned source manifest**
 
-Create `manifests/linux1-sources.lock` with exact fields per line:
+Create `linux-1.0.0/manifests/linux1-sources.lock` with exact fields per line:
 
 ```text
 # name|url|sha256|filename
@@ -58,16 +58,16 @@ build/linux1/
 third_party/linux1/
 ```
 
-- [ ] **Step 3: Create `linux1-userspace/README.md`**
+- [ ] **Step 3: Create `linux-1.0.0/userspace/README.md`**
 
 Create a short file documenting that this tree contains syscall-only i386 userspace sources for Linux 1.0.0 smoke boot.
 
-- [ ] **Step 4: Create `linux1-userspace/src/init.S` placeholder**
+- [ ] **Step 4: Create `linux-1.0.0/userspace/src/init.S` placeholder**
 
 Create an assembly placeholder that intentionally fails final behavior tests until implementation is added:
 
 ```asm
-/* linux1-userspace/src/init.S */
+/* linux-1.0.0/userspace/src/init.S */
 .globl _start
 _start:
   mov $1, %eax
@@ -75,23 +75,23 @@ _start:
   int $0x80
 ```
 
-- [ ] **Step 5: Create `linux1-userspace/src/sh.S` placeholder**
+- [ ] **Step 5: Create `linux-1.0.0/userspace/src/sh.S` placeholder**
 
 Create a matching minimal `_start` exit stub for `sh.S`.
 
-- [ ] **Step 6: Create `linux1-userspace/src/echo.S` placeholder**
+- [ ] **Step 6: Create `linux-1.0.0/userspace/src/echo.S` placeholder**
 
 Create a matching minimal `_start` exit stub for `echo.S`.
 
 - [ ] **Step 7: Verify scaffold file existence and manifest format**
 
 ```bash
-test -f manifests/linux1-sources.lock
-test -f linux1-userspace/README.md
-test -f linux1-userspace/src/init.S
-test -f linux1-userspace/src/sh.S
-test -f linux1-userspace/src/echo.S
-awk -F'|' 'NF==4 || /^#/ {next} {bad=1} END {exit bad}' manifests/linux1-sources.lock
+test -f linux-1.0.0/manifests/linux1-sources.lock
+test -f linux-1.0.0/userspace/README.md
+test -f linux-1.0.0/userspace/src/init.S
+test -f linux-1.0.0/userspace/src/sh.S
+test -f linux-1.0.0/userspace/src/echo.S
+awk -F'|' 'NF==4 || /^#/ {next} {bad=1} END {exit bad}' linux-1.0.0/manifests/linux1-sources.lock
 echo \"OK: linux1 scaffolding baseline\"
 ```
 
@@ -100,7 +100,7 @@ Expected: final output includes `OK: linux1 scaffolding baseline`.
 - [ ] **Step 8: Commit scaffolding**
 
 ```bash
-git add manifests/linux1-sources.lock .gitignore linux1-userspace/
+git add linux-1.0.0/manifests/linux1-sources.lock .gitignore linux-1.0.0/userspace/
 git commit -m "chore: add linux1 source manifest and userspace scaffolding"
 ```
 
@@ -181,14 +181,14 @@ git commit -m "test: add failing linux1 build and boot smoke tests"
 ### Task 3: Implement source fetch + checksum + provenance scripts
 
 **Files:**
-- Create: `scripts/fetch_linux1_sources.sh`
-- Create: `scripts/verify_linux1_provenance.sh`
+- Create: `scripts/linux1/fetch_sources.sh`
+- Create: `scripts/linux1/verify_provenance.sh`
 
 - [ ] **Step 1: Implement fetch script**
 
 Script requirements:
 - `set -euo pipefail`
-- parse `manifests/linux1-sources.lock`
+- parse `linux-1.0.0/manifests/linux1-sources.lock`
 - download into `build/linux1/sources/`
 - if hash in manifest is `AUTO_SHA256`, compute and print it, then fail with exit 2
 - if hash is set, enforce SHA256 match
@@ -197,27 +197,27 @@ Script requirements:
 - [ ] **Step 2: Fill manifest SHA256 values once and rerun fetch**
 
 ```bash
-bash scripts/fetch_linux1_sources.sh || true
+bash scripts/linux1/fetch_sources.sh || true
 # update manifest with printed SHA256 values
-bash scripts/fetch_linux1_sources.sh
+bash scripts/linux1/fetch_sources.sh
 ```
 
 Expected: exit 0 with verified archives present.
 
 - [ ] **Step 3: Implement provenance verifier**
 
-`verify_linux1_provenance.sh` must:
+`scripts/linux1/verify_provenance.sh` must:
 - unpack kernel tarball to temp dir
-- apply `patches/linux-1.0.0/*.patch` (if any)
+- apply `linux-1.0.0/patches/kernel/*.patch` (if any)
 - compare resulting tree to committed `linux-1.0.0/` (excluding generated files)
-- verify LILO source extraction + `patches/lilo/*.patch` applies cleanly
+- verify LILO source extraction + `linux-1.0.0/patches/lilo/*.patch` applies cleanly
 - verify LILO build artifact contract (`build/linux1/lilo/` exists, contains built `lilo` binary, and reports expected version signature)
 - print `OK: provenance` on success
 
 - [ ] **Step 4: Verify fetch script behavior before commit**
 
 ```bash
-bash scripts/fetch_linux1_sources.sh
+bash scripts/linux1/fetch_sources.sh
 ```
 
 Expected: exit 0 with verified sources and no checksum mismatches.
@@ -225,7 +225,7 @@ Expected: exit 0 with verified sources and no checksum mismatches.
 - [ ] **Step 5: Commit scripts**
 
 ```bash
-git add scripts/fetch_linux1_sources.sh scripts/verify_linux1_provenance.sh manifests/linux1-sources.lock
+git add scripts/linux1/fetch_sources.sh scripts/linux1/verify_provenance.sh linux-1.0.0/manifests/linux1-sources.lock
 git commit -m "build: add linux1 fetch and provenance verification scripts"
 ```
 
@@ -235,7 +235,7 @@ git commit -m "build: add linux1 fetch and provenance verification scripts"
 
 **Files:**
 - Create: `linux-1.0.0/` (vendored source)
-- Create: `patches/linux-1.0.0/` (as needed)
+- Create: `linux-1.0.0/patches/kernel/` (as needed)
 
 - [ ] **Step 1: Extract kernel source from pinned archive**
 
@@ -249,8 +249,8 @@ cp -a /tmp/linux1-import/linux/. linux-1.0.0/
 - [ ] **Step 2: Apply minimal compatibility patches (if build requires)**
 
 ```bash
-if ls patches/linux-1.0.0/*.patch >/dev/null 2>&1; then
-  for p in patches/linux-1.0.0/*.patch; do
+if ls linux-1.0.0/patches/kernel/*.patch >/dev/null 2>&1; then
+  for p in linux-1.0.0/patches/kernel/*.patch; do
     patch -d linux-1.0.0 -p1 < "$p"
   done
 fi
@@ -261,7 +261,7 @@ Expected: all patches apply without rejects.
 - [ ] **Step 3: Commit vendored kernel**
 
 ```bash
-git add linux-1.0.0 patches/linux-1.0.0
+git add linux-1.0.0 linux-1.0.0/patches/kernel
 git commit -m "chore: vendor linux 1.0.0 kernel source with minimal compatibility patches"
 ```
 
@@ -270,13 +270,13 @@ git commit -m "chore: vendor linux 1.0.0 kernel source with minimal compatibilit
 ### Task 5: Implement kernel/LILO/userspace build scripts
 
 **Files:**
-- Create: `scripts/build_linux1_kernel.sh`
-- Create: `scripts/build_linux1_lilo.sh`
-- Create: `scripts/build_linux1_userspace.sh`
-- Create: `linux1-userspace/src/syscalls.S`
-- Create: `linux1-userspace/src/common.inc`
-- Modify: `linux1-userspace/src/init.S`
-- Modify: `linux1-userspace/src/sh.S`
+- Create: `scripts/linux1/build_kernel.sh`
+- Create: `scripts/linux1/build_lilo.sh`
+- Create: `scripts/linux1/build_userspace.sh`
+- Create: `linux-1.0.0/userspace/src/syscalls.S`
+- Create: `linux-1.0.0/userspace/src/common.inc`
+- Modify: `linux-1.0.0/userspace/src/init.S`
+- Modify: `linux-1.0.0/userspace/src/sh.S`
 
 - [ ] **Step 1: Implement kernel build script**
 
@@ -289,7 +289,7 @@ Requirements:
 
 Requirements:
 - extract lilo archive from `build/linux1/sources/`
-- apply `patches/lilo/*.patch` (if present)
+- apply `linux-1.0.0/patches/lilo/*.patch` (if present)
 - build artifacts into `build/linux1/lilo/`
 - emit standard error contract
 
@@ -302,7 +302,7 @@ Requirements:
   - `build/linux1/rootfs/bin/sh`
   - `build/linux1/rootfs/bin/echo`
 - create device nodes in staging tree metadata plan (actual nodes created in disk assembly phase)
-- emit failure lines in contract form: `ERROR:build-linux1-userspace:<reason>` with exit 1/2 contract compliance
+- emit failure lines in contract form: `ERROR:build-linux-1.0.0/userspace:<reason>` with exit 1/2 contract compliance
 
 - [ ] **Step 4: Implement init/shell marker behavior**
 
@@ -312,9 +312,9 @@ Requirements:
 - [ ] **Step 5: Verify build scripts in isolation**
 
 ```bash
-bash scripts/build_linux1_kernel.sh
-bash scripts/build_linux1_lilo.sh
-bash scripts/build_linux1_userspace.sh
+bash scripts/linux1/build_kernel.sh
+bash scripts/linux1/build_lilo.sh
+bash scripts/linux1/build_userspace.sh
 ```
 
 Expected: outputs created under `build/linux1/{kernel,lilo,rootfs}`.
@@ -322,7 +322,7 @@ Expected: outputs created under `build/linux1/{kernel,lilo,rootfs}`.
 - [ ] **Step 6: Commit build scripts/userspace**
 
 ```bash
-git add scripts/build_linux1_kernel.sh scripts/build_linux1_lilo.sh scripts/build_linux1_userspace.sh linux1-userspace/
+git add scripts/linux1/build_kernel.sh scripts/linux1/build_lilo.sh scripts/linux1/build_userspace.sh linux-1.0.0/userspace/
 git commit -m "build: add linux1 kernel lilo and syscall-only userspace build scripts"
 ```
 
@@ -331,8 +331,8 @@ git commit -m "build: add linux1 kernel lilo and syscall-only userspace build sc
 ### Task 6: Implement disk assembly and QEMU run scripts
 
 **Files:**
-- Create: `scripts/mk_linux1_disk.sh`
-- Create: `scripts/run_linux1_qemu.sh`
+- Create: `scripts/linux1/mk_disk.sh`
+- Create: `scripts/linux1/run_qemu.sh`
 
 - [ ] **Step 1: Implement deterministic ext2 disk assembly**
 
@@ -349,7 +349,7 @@ mke2fs -t ext2 -O none -I 128 -b 1024
 - install LILO into MBR using built LILO artifacts
 - create `/dev/console` and `/dev/null` in rootfs
 - verify ext2 features after creation (for example `dumpe2fs -h <fs-dev>` check no unsupported feature flags) and fail if incompatible
-- detect privilege requirement early; if insufficient privileges, print one actionable rerun path (for example `sudo bash scripts/mk_linux1_disk.sh`) and exit 2
+- detect privilege requirement early; if insufficient privileges, print one actionable rerun path (for example `sudo bash scripts/linux1/mk_disk.sh`) and exit 2
 - emit failure lines in contract form: `ERROR:mk-disk:<reason>` with exit 1/2 contract compliance
 
 - [ ] **Step 2: Implement QEMU runner with cleanup ownership**
@@ -365,8 +365,8 @@ Requirements:
 - [ ] **Step 3: Verify marker capture path**
 
 ```bash
-bash scripts/mk_linux1_disk.sh
-bash scripts/run_linux1_qemu.sh
+bash scripts/linux1/mk_disk.sh
+bash scripts/linux1/run_qemu.sh
 sed -n '1,220p' build/linux1/logs/boot.log
 ```
 
@@ -375,7 +375,7 @@ Expected markers in order: `LILO`, `Linux version 1.0.0`, `linux1-init: start`, 
 - [ ] **Step 4: Commit disk/run scripts**
 
 ```bash
-git add scripts/mk_linux1_disk.sh scripts/run_linux1_qemu.sh
+git add scripts/linux1/mk_disk.sh scripts/linux1/run_qemu.sh
 git commit -m "feat: add linux1 disk assembly and qemu serial runner"
 ```
 
@@ -396,12 +396,12 @@ Add `.PHONY` entries and targets:
 - `linux1-clean`
 
 `linux1` should call, in order:
-- `bash scripts/fetch_linux1_sources.sh`
-- `bash scripts/build_linux1_kernel.sh`
-- `bash scripts/build_linux1_lilo.sh`
-- `bash scripts/build_linux1_userspace.sh`
-- `bash scripts/mk_linux1_disk.sh`
-- `bash scripts/run_linux1_qemu.sh`
+- `bash scripts/linux1/fetch_sources.sh`
+- `bash scripts/linux1/build_kernel.sh`
+- `bash scripts/linux1/build_lilo.sh`
+- `bash scripts/linux1/build_userspace.sh`
+- `bash scripts/linux1/mk_disk.sh`
+- `bash scripts/linux1/run_qemu.sh`
 
 `test-linux1`:
 - `pytest tests/test_linux1.py tests/test_linux1_provenance.py -v`
@@ -411,7 +411,7 @@ Add `.PHONY` entries and targets:
 
 Add provenance CI path:
 
-- create `tests/test_linux1_provenance.py` that runs `bash scripts/verify_linux1_provenance.sh` and asserts exit 0.
+- create `tests/test_linux1_provenance.py` that runs `bash scripts/linux1/verify_provenance.sh` and asserts exit 0.
 - ensure `test-linux1` includes this test so CI that runs project tests enforces provenance.
 
 - [ ] **Step 2: Update README with Linux1 flow**
@@ -441,7 +441,7 @@ git commit -m "build: wire linux1 targets and documentation"
 
 **Files:**
 - Modify: `tests/test_linux1.py` (only if needed to align with final log paths/timeouts)
-- Modify: `scripts/verify_linux1_provenance.sh` (only if needed to fix final provenance contract gaps)
+- Modify: `scripts/linux1/verify_provenance.sh` (only if needed to fix final provenance contract gaps)
 
 - [ ] **Step 1: Run Linux1 test module**
 
@@ -456,7 +456,7 @@ Expected:
 - [ ] **Step 2: Run provenance verification**
 
 ```bash
-bash scripts/verify_linux1_provenance.sh
+bash scripts/linux1/verify_provenance.sh
 ```
 
 Expected: `OK: provenance`
@@ -476,7 +476,7 @@ Expected:
 - [ ] **Step 4: Commit final test alignment (if any)**
 
 ```bash
-git add tests/test_linux1.py scripts/verify_linux1_provenance.sh
+git add tests/test_linux1.py scripts/linux1/verify_provenance.sh
 # only if changes were made in this phase
 git commit -m "test: finalize linux1 smoke and provenance verification"
 ```
@@ -499,7 +499,7 @@ Expected: all pass.
 
 Record in final report:
 - generated artifact paths
-- privilege expectations for `mk_linux1_disk.sh`
+- privilege expectations for `scripts/linux1/mk_disk.sh`
 - host support scope (Ubuntu 24.04 x86_64 for milestone 1)
 
 - [ ] **Step 3: Run superpowers:finishing-a-development-branch**

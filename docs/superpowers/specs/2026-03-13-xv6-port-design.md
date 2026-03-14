@@ -58,7 +58,7 @@ qos/
 │   ├── .gitignore            # ignores build artifacts
 │   └── README                # updated with prerequisites and build instructions
 ├── scripts/
-│   └── build_xv6.sh          # thin wrapper: invokes make with cross-compiler flags
+│   └── scripts/xv6/build.sh          # thin wrapper: invokes make with cross-compiler flags
 ├── tests/
 │   └── test_xv6.py           # pytest: build check + boot smoke test
 └── Makefile                  # xv6/xv6-clean/test-xv6 targets added; test-all/clean extended
@@ -89,12 +89,12 @@ Notes:
 ### `xv6/Makefile` Patches
 
 No Makefile patches are required. The upstream Makefile uses a `ifndef TOOLPREFIX` guard,
-so passing `TOOLPREFIX=i686-linux-gnu-` on the command line in `build_xv6.sh` overrides the
+so passing `TOOLPREFIX=i686-linux-gnu-` on the command line in `scripts/xv6/build.sh` overrides the
 auto-detection entirely. The `QEMU` variable defaults to `qemu-system-i386`, which is correct.
 
 The build script builds both `xv6.img` and `fs.img` — both are required for a bootable xv6.
 
-### `scripts/build_xv6.sh`
+### `scripts/xv6/build.sh`
 
 ```bash
 #!/usr/bin/env bash
@@ -144,11 +144,11 @@ are available on this host and must be declared as CI prerequisites.
  	@$(MAKE) -C c-os ARCH=aarch64 smoke
  	@$(MAKE) -C rust-os ARCH=x86_64 smoke
  	@$(MAKE) -C rust-os ARCH=aarch64 smoke
-+	@bash scripts/build_xv6.sh
++	@bash scripts/xv6/build.sh
 +	@pytest tests/test_xv6.py -v
 
 +xv6:
-+	@bash scripts/build_xv6.sh
++	@bash scripts/xv6/build.sh
 +
 +xv6-clean:
 +	@$(MAKE) -C xv6 clean
@@ -214,7 +214,7 @@ XV6_FS_IMG = ROOT / "xv6" / "fs.img"
 @pytest.fixture(scope="module", autouse=True)
 def build_xv6():
     result = subprocess.run(
-        ["bash", "scripts/build_xv6.sh"],
+        ["bash", "scripts/xv6/build.sh"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

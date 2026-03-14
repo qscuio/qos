@@ -29,11 +29,11 @@ test-all:
 	@$(MAKE) -C c-os ARCH=aarch64 smoke
 	@$(MAKE) -C rust-os ARCH=x86_64 smoke
 	@$(MAKE) -C rust-os ARCH=aarch64 smoke
-	@bash scripts/build_xv6.sh
+	@bash scripts/xv6/build.sh
 	@pytest tests/test_xv6.py -v
 
 xv6:
-	@bash scripts/build_xv6.sh
+	@bash scripts/xv6/build.sh
 
 xv6-clean:
 	@$(MAKE) -C xv6 TOOLPREFIX=i686-linux-gnu- clean
@@ -42,20 +42,20 @@ test-xv6:
 	@pytest tests/test_xv6.py -v
 
 linux1:
-	@bash scripts/fetch_linux1_sources.sh
-	@bash scripts/build_linux1_kernel.sh
-	@bash scripts/build_linux1_userspace.sh
-	@bash scripts/build_linux1_lilo.sh
-	@bash scripts/mk_linux1_disk.sh
-	@bash scripts/run_linux1_qemu.sh
+	@bash scripts/linux1/fetch_sources.sh
+	@bash scripts/linux1/build_kernel.sh
+	@bash scripts/linux1/build_userspace.sh
+	@bash scripts/linux1/build_lilo.sh
+	@bash scripts/linux1/mk_disk.sh
+	@bash scripts/linux1/run_qemu.sh
 
 linux1-curses:
-	@bash scripts/fetch_linux1_sources.sh
-	@bash scripts/build_linux1_kernel.sh
-	@bash scripts/build_linux1_userspace.sh
-	@bash scripts/build_linux1_lilo.sh
-	@bash scripts/mk_linux1_disk.sh
-	@bash scripts/run_linux1_curses.sh
+	@bash scripts/linux1/fetch_sources.sh
+	@bash scripts/linux1/build_kernel.sh
+	@bash scripts/linux1/build_userspace.sh
+	@bash scripts/linux1/build_lilo.sh
+	@bash scripts/linux1/mk_disk.sh
+	@bash scripts/linux1/run_curses.sh
 
 test-linux1:
 	@pytest tests/test_linux1.py -v

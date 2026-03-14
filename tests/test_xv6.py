@@ -12,7 +12,7 @@ XV6_FS_IMG = ROOT / "xv6" / "fs.img"
 @pytest.fixture(scope="module", autouse=True)
 def build_xv6():
     result = subprocess.run(
-        ["bash", "scripts/build_xv6.sh"],
+        ["bash", "scripts/xv6/build.sh"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

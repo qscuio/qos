@@ -6,6 +6,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 EXPECTED_DIRS = [
+    "c-os",
+    "rust-os",
+    "linux-1.0.0",
+    "linux-lab",
+    "xv6",
     "c-os/boot/x86_64",
     "c-os/boot/aarch64",
     "c-os/kernel/arch/x86_64",
@@ -23,10 +28,31 @@ EXPECTED_DIRS = [
     "rust-os/userspace",
 ]
 
+LINUX1_OWNED_PATHS = [
+    "linux-1.0.0/userspace/src/init.S",
+    "linux-1.0.0/userspace/src/sh.S",
+    "linux-1.0.0/manifests/linux1-sources.lock",
+    "linux-1.0.0/patches/lilo",
+]
+
+REMOVED_TOP_LEVEL_PATHS = [
+    "linux1-userspace",
+]
+
 
 def test_repository_layout_matches_spec_scaffold() -> None:
     missing = [path for path in EXPECTED_DIRS if not (ROOT / path).is_dir()]
     assert missing == [], f"missing directories: {missing}"
+
+
+def test_linux1_owned_paths_live_under_linux_1_0_0() -> None:
+    missing = [path for path in LINUX1_OWNED_PATHS if not (ROOT / path).exists()]
+    assert missing == [], f"missing linux1-owned paths: {missing}"
+
+
+def test_old_top_level_linux1_owned_paths_are_gone() -> None:
+    present = [path for path in REMOVED_TOP_LEVEL_PATHS if (ROOT / path).exists()]
+    assert present == [], f"stale top-level linux1-owned paths remain: {present}"
 
 
 def test_boot_info_contract_files_exist_and_include_required_fields() -> None:
