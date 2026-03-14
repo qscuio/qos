@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HOST=${LINUX_LAB_GUEST_HOST:-10.10.10.1}
+USER=${LINUX_LAB_GUEST_USER:-qwert}
+KEY=${LINUX_LAB_SSH_KEY:-}
+
+if [ -n "$KEY" ]; then
+    exec ssh -i "$KEY" "${USER}@${HOST}" -o StrictHostKeyChecking=no "$@"
+fi
+
+exec ssh "${USER}@${HOST}" -o StrictHostKeyChecking=no "$@"

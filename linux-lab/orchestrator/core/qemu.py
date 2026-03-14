@@ -3,9 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def build_qemu_command(*, arch: str, kernel_image: Path, disk_image: Path, shared_dir: Path) -> list[str]:
+def build_qemu_command(
+    *,
+    arch: str,
+    kernel_image: Path,
+    disk_image: Path,
+    shared_dir: Path,
+    network_up_script: Path | None = None,
+    network_down_script: Path | None = None,
+    pidfile: Path | None = None,
+) -> list[str]:
+    tap_up = str(network_up_script) if network_up_script is not None else "no"
+    tap_down = str(network_down_script) if network_down_script is not None else "no"
     if arch == "x86_64":
-        return [
+        command = [
             "qemu-system-x86_64",
             "-qmp",
             "tcp:localhost:23456,server,nowait",
@@ -26,14 +37,25 @@ def build_qemu_command(*, arch: str, kernel_image: Path, disk_image: Path, share
             f"local,id=myid,path={shared_dir},security_model=mapped",
             "-device",
             "virtio-9p-pci,fsdev=myid,mount_tag=hostshare",
+            "-net",
+            "nic,model=e1000",
+            "-net",
+            f"tap,ifname=tap1,script={tap_up},downscript={tap_down}",
+            "-net",
+            "nic,model=e1000",
+            "-net",
+            "tap,ifname=tap2,script=no,downscript=no",
             "-nographic",
             "-s",
             "-S",
             "-monitor",
             "telnet:localhost:12345,server,nowait",
         ]
+        if pidfile is not None:
+            command.extend(["-pidfile", str(pidfile)])
+        return command
     if arch == "arm64":
-        return [
+        command = [
             "qemu-system-aarch64",
             "-qmp",
             "tcp:localhost:23456,server,nowait",
@@ -57,10 +79,21 @@ def build_qemu_command(*, arch: str, kernel_image: Path, disk_image: Path, share
             f"local,id=myid,path={shared_dir},security_model=mapped",
             "-device",
             "virtio-9p-pci,fsdev=myid,mount_tag=hostshare",
+            "-net",
+            "nic,model=e1000",
+            "-net",
+            f"tap,ifname=tap1,script={tap_up},downscript={tap_down}",
+            "-net",
+            "nic,model=e1000",
+            "-net",
+            "tap,ifname=tap2,script=no,downscript=no",
             "-nographic",
             "-s",
             "-S",
             "-monitor",
             "telnet:localhost:12345,server,nowait",
         ]
+        if pidfile is not None:
+            command.extend(["-pidfile", str(pidfile)])
+        return command
     raise ValueError(f"unsupported qemu arch: {arch}")

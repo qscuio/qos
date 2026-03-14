@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orchestrator.core.stages import StageDefinition, make_stage_result
+from orchestrator.core.stages import StageDefinition, auto_jobs, make_stage_result, run_stage_command
 
 
 def _execute(request, manifests, request_root: Path) -> dict:
@@ -12,9 +12,12 @@ def _execute(request, manifests, request_root: Path) -> dict:
     kernel_tree = workspace_root / "kernel" / f"linux-{request.kernel_version}"
     build_root = workspace_root / "build"
     kernel_image_path = build_root / "arch" / request.arch / "boot" / arch.kernel_image_name
+    jobs = auto_jobs()
     status = "placeholder"
     if request.command == "run" and request.dry_run:
         status = "dry-run"
+    elif request.command == "run":
+        status = "succeeded"
 
     commands = [
         [
@@ -31,7 +34,7 @@ def _execute(request, manifests, request_root: Path) -> dict:
             f"CROSS_COMPILE={arch.toolchain_prefix}",
             arch.kernel_image_name,
             "-j",
-            "auto",
+            jobs,
         ],
         [
             "make",
@@ -40,12 +43,18 @@ def _execute(request, manifests, request_root: Path) -> dict:
             f"CROSS_COMPILE={arch.toolchain_prefix}",
             "modules",
             "-j",
-            "auto",
+            jobs,
         ],
     ]
 
     log_path = request_root / "logs" / "build-kernel.log"
-    log_path.write_text("build-kernel: runtime metadata emitted\n", encoding="utf-8")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    if request.command == "run" and not request.dry_run:
+        log_path.write_text("", encoding="utf-8")
+        for command in commands:
+            run_stage_command(command, cwd=kernel_tree, log_path=log_path)
+    else:
+        log_path.write_text("build-kernel: runtime metadata emitted\n", encoding="utf-8")
     return make_stage_result(
         stage="build-kernel",
         status=status,

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VMLINUX=${LINUX_LAB_VMLINUX:-}
+if [ -z "$VMLINUX" ]; then
+    REQUEST_ROOT=$(find build/linux-lab/requests -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1 || true)
+    if [ -n "$REQUEST_ROOT" ] && [ -f "$REQUEST_ROOT/workspace/build/vmlinux" ]; then
+        VMLINUX="$REQUEST_ROOT/workspace/build/vmlinux"
+    else
+        VMLINUX=build/vmlinux
+    fi
+fi
+
+exec gdb-multiarch "$VMLINUX" -iex 'set auto-load safe-path /' -iex 'set pagination off' "$@"

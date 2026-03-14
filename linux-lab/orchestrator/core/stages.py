@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +68,38 @@ def placeholder_executor(stage_name: str) -> StageExecutor:
         )
 
     return _execute
+
+
+def append_log(path: Path, line: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line)
+        if not line.endswith("\n"):
+            handle.write("\n")
+
+
+def run_stage_command(command: list[str], *, cwd: Path, log_path: Path) -> subprocess.CompletedProcess[str]:
+    display = " ".join(command)
+    append_log(log_path, f"$ {display}")
+    with subprocess.Popen(
+        command,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
+    ) as process:
+        assert process.stdout is not None
+        for line in process.stdout:
+            append_log(log_path, line.rstrip("\n"))
+        returncode = process.wait()
+    if returncode != 0:
+        raise RuntimeError(f"command failed with exit {returncode}: {display}")
+    return subprocess.CompletedProcess(command, returncode, "", "")
+
+
+def auto_jobs() -> str:
+    return str(os.cpu_count() or 1)
 
 
 def validate_state(request, request_root: Path) -> dict:

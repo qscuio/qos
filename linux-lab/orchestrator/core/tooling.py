@@ -41,9 +41,12 @@ def resolve_tool_keys(tool_groups: list[str]) -> list[str]:
 def resolve_tool_plan(*, tool_keys: list[str], linux_lab_root: Path) -> list[dict[str, Any]]:
     manifests = load_tool_manifests(linux_lab_root / "tools")
     plan: list[dict[str, Any]] = []
+    workspace_root = linux_lab_root.parent
     for key in tool_keys:
         manifest = manifests[key]
         checkout_dir = Path(manifest["checkout_dir"])
+        if not checkout_dir.is_absolute():
+            checkout_dir = workspace_root / checkout_dir
         plan.append(
             {
                 "key": key,
