@@ -135,6 +135,35 @@ Compatibility-mode rule:
 - `linux-lab/bin/ulk` maps to the native `plan` command in Phase 1
 - a successful Phase 1 `ulk` invocation means "request accepted and placeholder stage plan emitted", not "kernel build or boot completed"
 
+The native CLI entrypoint in Phase 1 is:
+
+```bash
+linux-lab/bin/linux-lab <validate|plan> \
+  --kernel <version> \
+  --arch <x86_64|arm64> \
+  --image <noble|jammy> \
+  --profile <name> [--profile <name> ...] \
+  [--mirror <region>]
+```
+
+Phase 1 native examples:
+
+```bash
+linux-lab/bin/linux-lab validate \
+  --kernel 6.18.4 \
+  --arch x86_64 \
+  --image noble \
+  --profile default-lab
+
+linux-lab/bin/linux-lab plan \
+  --kernel 6.9.8 \
+  --arch arm64 \
+  --image jammy \
+  --profile debug \
+  --profile rust \
+  --mirror sg
+```
+
 ### Resolved Request Model
 
 Every execution resolves to one normalized request object. The minimum schema is:
@@ -194,6 +223,43 @@ It must not contain orchestration policy beyond parsing and translation.
 ## Manifest Model
 
 The orchestrator uses four manifest families.
+
+### Phase 1 Minimum Manifest Fields
+
+Phase 1 schemas must explicitly support the fields needed for deterministic request resolution.
+
+Kernel manifest minimum fields:
+
+- `key`
+- `supported_arches`
+- `default_compat`: boolean
+- `source_url`: optional placeholder string
+- `patch_set`: optional placeholder string
+- `config_family`: optional placeholder string
+
+Image manifest minimum fields:
+
+- `key`
+- `default_compat`: boolean
+- `mirror_regions`: list of accepted mirror keys
+- `recipe_ref`: optional placeholder string
+
+Profile manifest minimum fields:
+
+- `key`
+- `kind`: `concrete` or `meta`
+- `precedence`: integer
+- `replaces`: list of profile keys, default empty
+- `expands_to`: list of profile keys, allowed only for `kind: meta`
+- `fragment_ref`: optional placeholder string
+
+Phase 1 profile resolution order is:
+
+1. expand meta-profiles in listed order
+2. deduplicate by first occurrence
+3. apply `replaces`
+4. sort the remaining concrete profiles by `precedence`, then by `key`
+5. emit the sorted concrete profile list as the final `profile-set`
 
 ### Kernel Manifests
 
@@ -296,6 +362,15 @@ The explicit Phase 1 profile keys are:
 4. `samples`
 5. `debug-tools`
 
+The concrete Phase 1 precedence values are:
+
+- `debug`: `10`
+- `bpf`: `20`
+- `rust`: `30`
+- `samples`: `40`
+- `debug-tools`: `50`
+- `minimal`: `100`
+
 Phase 1 requires only schema-valid profile manifests for these keys. Real config fragments and example onboarding remain later-phase work.
 
 ## Execution Model
@@ -347,7 +422,7 @@ build/linux-lab/requests/<request-fingerprint>/
 
 Phase 1 does not need stage-result caching beyond this fingerprinted request root. Resumable reuse across mutable build artifacts starts in later phases.
 
-If `plan` is re-run with the same request fingerprint in Phase 1, it overwrites `request.json`, `validate.json`, and `<stage>.json` in place. Historical run retention is a later-phase concern.
+If `plan` is re-run with the same request fingerprint in Phase 1, it overwrites `request.json`, `validate.json`, and `<stage>.json` in place. Phase 1 always re-emits the full stage-state set in dependency order and does not skip unchanged placeholder stages. Historical run retention is a later-phase concern.
 
 ### Stage Contract
 
@@ -549,10 +624,10 @@ The port needs tests at four levels.
 
 #### Stage Tests
 
-- fetch and patch behavior against fixture manifests
+- fetch and patch placeholder metadata emission against fixture manifests
 - configure stage placeholder planning
-- tool build planning
-- image and boot command assembly without needing a full system boot for every test
+- tool, image, and boot placeholder artifact planning
+- prepare-stage local prerequisite checks for writable state output
 
 Phase 1 does not require real kernel builds, debootstrap runs, or QEMU guest boots to count as complete.
 
