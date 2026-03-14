@@ -19,3 +19,23 @@ qemu/configs/*.qcow2
 # linux1 generated artifacts
 build/linux1/
 third_party/linux1/
+
+# linux1 source-tree generated build byproducts
+linux-1.0.0/.config
+linux-1.0.0/.depend
+linux-1.0.0/.version
+linux-1.0.0/config.old
+linux-1.0.0/**/.depend
+linux-1.0.0/**/*.o
+linux-1.0.0/**/*.a
+linux-1.0.0/**/*.s
+linux-1.0.0/boot/bootsect
+linux-1.0.0/boot/setup
+linux-1.0.0/include/linux/autoconf.h
+linux-1.0.0/kernel/ksyms.lst
+linux-1.0.0/tools/build
+linux-1.0.0/tools/version.h
+linux-1.0.0/tools/zSystem
+linux-1.0.0/zBoot/zSystem
+linux-1.0.0/zImage
+linux-1.0.0/zSystem.map
