@@ -68,6 +68,10 @@ The remaining mismatch is not broad repository shape. It is fidelity:
 - the stage metadata does not yet make the `ulk`-used tool surface explicit
 - no evidence shows that `ulk` itself requires the wider standalone `../qulk/userspace/*` trees
 
+The repo-local path for the `crash` extension assets in this port should be:
+
+- `linux-lab/tools/assets/crash/extensions/`
+
 ## Architecture
 
 Keep one `linux-lab` control path and extend only the surfaces that map directly to `ulk`.
@@ -83,7 +87,7 @@ Execution ownership:
 
 - `build-tools` owns upstream tools and kernel in-tree tools
 - `build-examples` owns repo-local sample userspace such as `rust_learn/user`
-- `build-image` and `boot` remain unchanged except for consuming clearer artifact metadata
+- `build-image` and `boot` remain behaviorally unchanged in this pass
 
 This keeps the port small and faithful. The lab remains organized by source ownership rather than by whether something happens to produce a userland binary.
 
@@ -109,10 +113,23 @@ Required fidelity updates:
 
 - `crash` must record the extension asset copy behavior that `ulk` performed after `gdb_unzip`
 - `cgdb` remains host-built
-- `libbpf-bootstrap` remains manifest-managed, but its default behavior stays limited to checkout or light prepare unless a profile explicitly requests more
+- `libbpf-bootstrap` remains manifest-managed, but host runs stop at checkout and prepare
 - `retsnoop` remains manifest-managed under the same rule
 
-The manifest schema may grow modestly, for example with `post_prepare_commands` or `asset_copy` fields, but it should stay flat and easy to inspect.
+The tool manifest schema for this pass is extended with exact optional fields:
+
+- `build_policy`: one of `host-build`, `guest-build`, or `checkout-only`
+- `post_prepare_asset_copies`: list of flat copy rules with:
+  - `from`: repo-relative source path
+  - `to`: checkout-relative destination path
+- `guest_build_commands`: optional commands recorded in metadata but not executed on the host when `build_policy` is `guest-build`
+
+Required manifest assignments:
+
+- `crash`: `build_policy: host-build`, plus `post_prepare_asset_copies` from `linux-lab/tools/assets/crash/extensions/` to `extensions/`
+- `cgdb`: `build_policy: host-build`
+- `libbpf-bootstrap`: `build_policy: guest-build`
+- `retsnoop`: `build_policy: guest-build`
 
 ### `build-examples`
 
@@ -120,7 +137,7 @@ The manifest schema may grow modestly, for example with `post_prepare_commands` 
 
 For this pass, the explicit `ulk` requirement is:
 
-- build [linux-lab/examples/rust/rust_learn/user](/home/ubuntu/work/qos/linux-lab/examples/rust/rust_learn/user) when the matching Rust example path is in scope
+- build [linux-lab/examples/rust/rust_learn/user](/home/ubuntu/work/qos/linux-lab/examples/rust/rust_learn/user) whenever the enabled `rust_learn` catalog entry is selected by `rust-core` or `rust-all`
 
 If a later audit proves that `ulk` depended on a small repo-local helper outside example trees, that helper may be added surgically. Broad standalone userspace imports remain out of scope.
 
@@ -132,9 +149,10 @@ The `ulk`-relevant flow after that is:
 
 1. `build-tools` resolves external tool groups from kernel and profile manifests
 2. `build-tools` resolves a kernel-tools sub-plan from the selected kernel workspace
-3. `build-tools` records post-prepare actions such as `crash` extension asset copy
-4. `build-examples` resolves repo-local example plans, including `rust_learn/user`
-5. later stages consume artifact metadata but do not change ownership
+3. `build-tools` runs host-side checkout, prepare, asset-copy, and host-build actions according to each tool manifest `build_policy`
+4. `build-tools` records `guest_build_commands` for `guest-build` tools without executing them on the host
+5. `build-examples` resolves repo-local example plans, including `rust_learn/user`
+6. later stages remain unchanged and do not consume new keys in this pass
 
 Planned artifacts should be reported in stage metadata as:
 
@@ -148,6 +166,16 @@ Artifact locations:
 - kernel in-tree tool outputs stay in the selected kernel build workspace and are referenced by path in stage metadata
 - repo-local userspace outputs stay with the example workspace and are referenced through `examples-plan`
 
+Deterministic gating rules:
+
+- kernel manifests gain the tool group `kernel-tools`
+- `build-tools` includes kernel in-tree tool work whenever the resolved tool groups include `kernel-tools`
+- under the current runtime rules, every non-`minimal` request for a kernel manifest that lists `kernel-tools` includes that work
+- `minimal` keeps omitting all optional tool and example work because `build-tools` and `build-examples` already special-case the profile
+- `rust_learn/user` is included only when the enabled `rust_learn` catalog entry is selected by `rust-core` or `rust-all`
+- `crash` and `cgdb` execute host builds whenever their tool group is selected
+- `libbpf-bootstrap` and `retsnoop` execute clone and prepare steps only on the host; their manifest `guest_build_commands` are emitted as metadata for guest-side use and are not executed by `build-tools`
+
 ## Manifest And Metadata Contract
 
 The minimum metadata contract for this pass is:
@@ -155,6 +183,7 @@ The minimum metadata contract for this pass is:
 - `build-tools` state must list resolved external tools by key
 - `build-tools` state must list the kernel in-tree commands it will run
 - `build-tools` state must expose any extra asset-copy or post-prepare steps
+- `build-tools` state must distinguish `host-build` and `guest-build` tool entries
 - `build-examples` state must continue to show the repo-local userspace entries it will build
 
 Dry-run output must make the following visible without reading code:
@@ -162,6 +191,28 @@ Dry-run output must make the following visible without reading code:
 - whether `crash`, `cgdb`, `libbpf-bootstrap`, and `retsnoop` are in scope
 - whether kernel `tools/libapi` and `subdir=tools all` are in scope
 - whether `rust_learn/user` is in scope
+
+The additive metadata keys for `build-tools` are:
+
+- `external_tools`
+- `kernel_tools`
+- `post_prepare_asset_copies`
+
+For `external_tools`, each entry must include:
+
+- `key`
+- `build_policy`
+- `checkout_dir`
+- `prepare_commands`
+- `build_commands`
+- `guest_build_commands`
+- `post_prepare_asset_copies`
+
+Downstream contract:
+
+- `build-image` and `boot` are out of scope for behavioral changes in this pass
+- they do not need to consume the new metadata keys
+- any new tool metadata is additive only and must not break existing downstream stage state or helper-script workflows
 
 ## Error Handling
 
@@ -183,11 +234,14 @@ Add or update tests in four areas.
 Tool manifest tests:
 
 - verify the `crash` manifest expresses its extra repo-local setup
+- verify `crash` points at `linux-lab/tools/assets/crash/extensions/`
 - verify existing tool manifests still resolve cleanly
 
 Planner and metadata tests:
 
 - verify `build-tools` dry-run metadata includes external tool entries and kernel in-tree tool entries
+- verify `build-tools` dry-run metadata marks `crash` and `cgdb` as `host-build`
+- verify `build-tools` dry-run metadata marks `libbpf-bootstrap` and `retsnoop` as `guest-build`
 - verify `build-examples` still includes `rust_learn/user` through the catalog-driven flow
 - verify minimal profiles still omit optional tooling and examples
 
@@ -195,6 +249,7 @@ Fixture-backed live executor tests:
 
 - verify post-prepare actions run for a tool plan
 - verify kernel-tool commands are emitted and executed in the selected workspace
+- verify `guest-build` tools stop after checkout and prepare on the host
 - verify repo-local userspace builds still run from the example-owned path
 
 Regression tests:
