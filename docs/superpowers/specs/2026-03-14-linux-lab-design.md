@@ -146,6 +146,15 @@ linux-lab/bin/linux-lab <validate|plan> \
   [--mirror <region>]
 ```
 
+In native mode for Phase 1:
+
+- `--kernel` is required
+- `--arch` is required
+- `--image` is required
+- at least one `--profile` is required
+- `--mirror` is optional
+- native mode does not apply compatibility defaults for omitted flags
+
 Phase 1 native examples:
 
 ```bash
@@ -232,10 +241,14 @@ Kernel manifest minimum fields:
 
 - `key`
 - `supported_arches`
+- `supported_profiles`
+- `required_profiles`: optional list, default empty
 - `default_compat`: boolean
 - `source_url`: optional placeholder string
 - `patch_set`: optional placeholder string
 - `config_family`: optional placeholder string
+- `tool_groups`: optional list, default empty
+- `example_groups`: optional list, default empty
 
 Image manifest minimum fields:
 
@@ -243,6 +256,16 @@ Image manifest minimum fields:
 - `default_compat`: boolean
 - `mirror_regions`: list of accepted mirror keys
 - `recipe_ref`: optional placeholder string
+
+Architecture manifest minimum fields:
+
+- `key`
+- `toolchain_prefix`
+- `kernel_image_name`
+- `qemu_machine`
+- `qemu_cpu`
+- `console`
+- `supported_images`
 
 Profile manifest minimum fields:
 
@@ -252,6 +275,12 @@ Profile manifest minimum fields:
 - `replaces`: list of profile keys, default empty
 - `expands_to`: list of profile keys, allowed only for `kind: meta`
 - `fragment_ref`: optional placeholder string
+- `compatible_kernels`: optional list, default wildcard
+- `compatible_arches`: optional list, default wildcard
+- `host_tools`: optional list, default empty
+- `tool_groups`: optional list, default empty
+- `example_groups`: optional list, default empty
+- `post_build_refs`: optional list, default empty
 
 Phase 1 profile resolution order is:
 
@@ -260,6 +289,15 @@ Phase 1 profile resolution order is:
 3. apply `replaces`
 4. sort the remaining concrete profiles by `precedence`, then by `key`
 5. emit the sorted concrete profile list as the final `profile-set`
+
+Unsupported combination validation in Phase 1 uses only manifest-owned fields:
+
+- `kernel.supported_arches`
+- `kernel.supported_profiles`
+- `kernel.required_profiles`
+- `arch.supported_images`
+- `profile.compatible_kernels`
+- `profile.compatible_arches`
 
 ### Kernel Manifests
 
@@ -302,6 +340,8 @@ The initial parity set is:
 
 - `x86_64`
 - `arm64`
+
+Phase 1 requires schema-valid arch manifests for both keys, including placeholder toolchain and QEMU planning data.
 
 ### Image Manifests
 
@@ -392,7 +432,7 @@ Stage execution rules:
 - every stage receives a resolved request and declared upstream artifacts
 - every stage writes only to its owned subtree under `build/linux-lab/`
 - every stage records a machine-readable status file under `build/linux-lab/.../state/`
-- reruns may skip clean stages if inputs and manifest fingerprints have not changed
+- later phases may skip clean stages if inputs and manifest fingerprints have not changed
 - fallback delegation to retained helper logic is allowed during migration, but the logs must state when a fallback path was used
 
 Canonical request root:
@@ -460,6 +500,35 @@ Each stage result must be recorded as JSON with:
 - `error_message`: optional string
 
 This contract is the minimum needed to make stages independently implementable and testable without guessing internal runtime behavior.
+
+#### Phase 1 Stage I/O
+
+The canonical Phase 1 artifact descriptors are:
+
+- `resolved-request` (`request`)
+- `source-plan` (`plan`)
+- `prepare-report` (`report`)
+- `patch-plan` (`plan`)
+- `config-plan` (`plan`)
+- `kernel-plan` (`plan`)
+- `tools-plan` (`plan`)
+- `examples-plan` (`plan`)
+- `image-plan` (`plan`)
+- `boot-plan` (`plan`)
+
+Phase 1 stage I/O table:
+
+| Stage | Depends on | Consumes | Produces |
+|------|------------|----------|----------|
+| `fetch` | none | `resolved-request` | `source-plan` |
+| `prepare` | `fetch` | `resolved-request`, `source-plan` | `prepare-report` |
+| `patch` | `prepare` | `resolved-request`, `source-plan`, `prepare-report` | `patch-plan` |
+| `configure` | `patch` | `resolved-request`, `patch-plan` | `config-plan` |
+| `build-kernel` | `configure` | `resolved-request`, `config-plan` | `kernel-plan` |
+| `build-tools` | `configure` | `resolved-request`, `config-plan` | `tools-plan` |
+| `build-examples` | `build-kernel`, `build-tools` | `resolved-request`, `kernel-plan`, `tools-plan` | `examples-plan` |
+| `build-image` | `build-kernel`, `build-tools`, `build-examples` | `resolved-request`, `kernel-plan`, `tools-plan`, `examples-plan` | `image-plan` |
+| `boot` | `build-image` | `resolved-request`, `image-plan` | `boot-plan` |
 
 ## Component Boundaries
 
@@ -589,6 +658,7 @@ Error handling is stage-scoped and resumable.
 Phase 1 failure classification:
 
 - manifest syntax, unknown arguments, and unsupported kernel/arch/profile combinations are `validation` errors before stage execution
+- `validate` is purely static and performs no host checks
 - Phase 1 `prepare` checks only local prerequisites needed to emit state, such as writable build paths and a usable Python runtime
 - Phase 1 does not probe network reachability, mirror health, cross-compilers, debootstrap, or QEMU availability
 - later phases may add stage-specific prerequisite failures when those stages begin performing real work
@@ -617,10 +687,10 @@ The port needs tests at four levels.
 
 #### Fixture and Mapping Tests
 
-- known kernel manifests map to the right patch sets
+- known kernel manifests map to the right patch references and supported profile sets
 - arch manifests expose the expected toolchain and QEMU settings
 - image manifests cover supported release defaults and mirror overrides
-- profile manifests map to the right config fragments and build steps
+- profile manifests map to the right config fragments, tool groups, and example groups
 
 #### Stage Tests
 
