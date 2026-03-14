@@ -75,7 +75,30 @@ def _command_workdir(base_path: Path, entry: dict[str, Any]) -> Path:
     return base_path
 
 
-def _catalog_commands(entry: dict[str, Any], source_path: Path, build_root: Path) -> list[list[str]]:
+def _format_command(command: list[str], context: dict[str, str]) -> list[str]:
+    return [part.format(**context) for part in command]
+
+
+def _catalog_commands(
+    entry: dict[str, Any],
+    source_path: Path,
+    build_root: Path,
+    *,
+    kernel_tree: Path | None = None,
+    arch: str = "",
+    toolchain_prefix: str = "",
+    kernel_version: str = "",
+) -> list[list[str]]:
+    context = {
+        "entry_root": str(source_path),
+        "build_root": str(build_root),
+        "kernel_tree": str(kernel_tree or build_root),
+        "arch": arch,
+        "toolchain_prefix": toolchain_prefix,
+        "kernel_version": kernel_version,
+    }
+    if entry.get("build_commands"):
+        return [_format_command(command, context) for command in entry["build_commands"]]
     build_mode = entry["build_mode"]
     if build_mode == "kbuild-module":
         return [["make", "-C", str(build_root), f"M={source_path}"]]
@@ -103,12 +126,31 @@ def _catalog_commands(entry: dict[str, Any], source_path: Path, build_root: Path
     raise ValueError(f"unsupported build_mode in example planner: {build_mode}")
 
 
-def _modules_plan(group: str, linux_lab_root: Path, build_root: Path) -> dict[str, Any]:
+def _modules_plan(
+    group: str,
+    linux_lab_root: Path,
+    build_root: Path,
+    *,
+    kernel_tree: Path | None = None,
+    arch: str = "",
+    toolchain_prefix: str = "",
+    kernel_version: str = "",
+) -> dict[str, Any]:
     entries = _enabled_entries_for_group(linux_lab_root, group)
     module_dirs = [_resolve_catalog_source(linux_lab_root, entry["source"]) for entry in entries]
     commands: list[list[str]] = []
     for entry, path in zip(entries, module_dirs, strict=True):
-        commands.extend(_catalog_commands(entry, path, build_root))
+        commands.extend(
+            _catalog_commands(
+                entry,
+                path,
+                build_root,
+                kernel_tree=kernel_tree,
+                arch=arch,
+                toolchain_prefix=toolchain_prefix,
+                kernel_version=kernel_version,
+            )
+        )
     return {
         "group": group,
         "entries": entries,
@@ -117,14 +159,33 @@ def _modules_plan(group: str, linux_lab_root: Path, build_root: Path) -> dict[st
     }
 
 
-def _userspace_plan(group: str, linux_lab_root: Path) -> dict[str, Any]:
+def _userspace_plan(
+    group: str,
+    linux_lab_root: Path,
+    *,
+    build_root: Path,
+    kernel_tree: Path | None = None,
+    arch: str = "",
+    toolchain_prefix: str = "",
+    kernel_version: str = "",
+) -> dict[str, Any]:
     entries = _enabled_entries_for_group(linux_lab_root, group)
     sources: list[Path] = []
     commands: list[list[str]] = []
     for entry in entries:
         app_dir = _resolve_catalog_source(linux_lab_root, entry["source"])
         sources.extend(sorted(app_dir.glob("*.c")))
-        commands.extend(_catalog_commands(entry, app_dir, build_root=Path()))
+        commands.extend(
+            _catalog_commands(
+                entry,
+                app_dir,
+                build_root,
+                kernel_tree=kernel_tree,
+                arch=arch,
+                toolchain_prefix=toolchain_prefix,
+                kernel_version=kernel_version,
+            )
+        )
     return {
         "group": group,
         "entries": entries,
@@ -133,7 +194,16 @@ def _userspace_plan(group: str, linux_lab_root: Path) -> dict[str, Any]:
     }
 
 
-def _rust_plan(group: str, linux_lab_root: Path) -> dict[str, Any]:
+def _rust_plan(
+    group: str,
+    linux_lab_root: Path,
+    *,
+    build_root: Path,
+    kernel_tree: Path | None = None,
+    arch: str = "",
+    toolchain_prefix: str = "",
+    kernel_version: str = "",
+) -> dict[str, Any]:
     entries = _enabled_entries_for_group(linux_lab_root, group)
     rust_dirs = [_resolve_catalog_source(linux_lab_root, entry["source"]) for entry in entries]
     commands: list[list[str]] = []
@@ -144,7 +214,17 @@ def _rust_plan(group: str, linux_lab_root: Path) -> dict[str, Any]:
         user_dir = rust_dir / "user"
         if user_dir.exists():
             paths.append(str(user_dir))
-        commands.extend(_catalog_commands(entry, rust_dir, build_root=Path()))
+        commands.extend(
+            _catalog_commands(
+                entry,
+                rust_dir,
+                build_root,
+                kernel_tree=kernel_tree,
+                arch=arch,
+                toolchain_prefix=toolchain_prefix,
+                kernel_version=kernel_version,
+            )
+        )
         kernel_sample_sources.extend(str(path) for path in sorted(rust_dir.glob("*.rs")))
     return {
         "group": group,
@@ -155,14 +235,33 @@ def _rust_plan(group: str, linux_lab_root: Path) -> dict[str, Any]:
     }
 
 
-def _bpf_plan(group: str, linux_lab_root: Path) -> dict[str, Any]:
+def _bpf_plan(
+    group: str,
+    linux_lab_root: Path,
+    *,
+    build_root: Path,
+    kernel_tree: Path | None = None,
+    arch: str = "",
+    toolchain_prefix: str = "",
+    kernel_version: str = "",
+) -> dict[str, Any]:
     entries = _enabled_entries_for_group(linux_lab_root, group)
     sources: list[Path] = []
     commands: list[list[str]] = []
     for entry in entries:
         bpf_dir = _resolve_catalog_source(linux_lab_root, entry["source"])
         sources.extend(sorted(bpf_dir.glob("*.c")))
-        commands.extend(_catalog_commands(entry, bpf_dir, build_root=Path()))
+        commands.extend(
+            _catalog_commands(
+                entry,
+                bpf_dir,
+                build_root,
+                kernel_tree=kernel_tree,
+                arch=arch,
+                toolchain_prefix=toolchain_prefix,
+                kernel_version=kernel_version,
+            )
+        )
     return {
         "group": group,
         "entries": entries,
@@ -171,16 +270,89 @@ def _bpf_plan(group: str, linux_lab_root: Path) -> dict[str, Any]:
     }
 
 
-def resolve_example_plan(*, example_groups: list[str], linux_lab_root: Path, build_root: Path) -> list[dict[str, Any]]:
+def resolve_example_plan(
+    *,
+    example_groups: list[str],
+    linux_lab_root: Path,
+    build_root: Path,
+    kernel_tree: Path | None = None,
+    arch: str = "",
+    toolchain_prefix: str = "",
+    kernel_version: str = "",
+) -> list[dict[str, Any]]:
     planners = {
-        "modules-core": lambda: _modules_plan("modules-core", linux_lab_root, build_root),
-        "userspace-core": lambda: _userspace_plan("userspace-core", linux_lab_root),
-        "rust-core": lambda: _rust_plan("rust-core", linux_lab_root),
-        "bpf-core": lambda: _bpf_plan("bpf-core", linux_lab_root),
-        "modules-all": lambda: _modules_plan("modules-all", linux_lab_root, build_root),
-        "userspace-all": lambda: _userspace_plan("userspace-all", linux_lab_root),
-        "rust-all": lambda: _rust_plan("rust-all", linux_lab_root),
-        "bpf-all": lambda: _bpf_plan("bpf-all", linux_lab_root),
+        "modules-core": lambda: _modules_plan(
+            "modules-core",
+            linux_lab_root,
+            build_root,
+            kernel_tree=kernel_tree,
+            arch=arch,
+            toolchain_prefix=toolchain_prefix,
+            kernel_version=kernel_version,
+        ),
+        "userspace-core": lambda: _userspace_plan(
+            "userspace-core",
+            linux_lab_root,
+            build_root=build_root,
+            kernel_tree=kernel_tree,
+            arch=arch,
+            toolchain_prefix=toolchain_prefix,
+            kernel_version=kernel_version,
+        ),
+        "rust-core": lambda: _rust_plan(
+            "rust-core",
+            linux_lab_root,
+            build_root=build_root,
+            kernel_tree=kernel_tree,
+            arch=arch,
+            toolchain_prefix=toolchain_prefix,
+            kernel_version=kernel_version,
+        ),
+        "bpf-core": lambda: _bpf_plan(
+            "bpf-core",
+            linux_lab_root,
+            build_root=build_root,
+            kernel_tree=kernel_tree,
+            arch=arch,
+            toolchain_prefix=toolchain_prefix,
+            kernel_version=kernel_version,
+        ),
+        "modules-all": lambda: _modules_plan(
+            "modules-all",
+            linux_lab_root,
+            build_root,
+            kernel_tree=kernel_tree,
+            arch=arch,
+            toolchain_prefix=toolchain_prefix,
+            kernel_version=kernel_version,
+        ),
+        "userspace-all": lambda: _userspace_plan(
+            "userspace-all",
+            linux_lab_root,
+            build_root=build_root,
+            kernel_tree=kernel_tree,
+            arch=arch,
+            toolchain_prefix=toolchain_prefix,
+            kernel_version=kernel_version,
+        ),
+        "rust-all": lambda: _rust_plan(
+            "rust-all",
+            linux_lab_root,
+            build_root=build_root,
+            kernel_tree=kernel_tree,
+            arch=arch,
+            toolchain_prefix=toolchain_prefix,
+            kernel_version=kernel_version,
+        ),
+        "bpf-all": lambda: _bpf_plan(
+            "bpf-all",
+            linux_lab_root,
+            build_root=build_root,
+            kernel_tree=kernel_tree,
+            arch=arch,
+            toolchain_prefix=toolchain_prefix,
+            kernel_version=kernel_version,
+        ),
     }
 
     resolved: list[dict[str, Any]] = []

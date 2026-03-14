@@ -3,6 +3,7 @@ kind: "meta"
 precedence: 0
 replaces: []
 expands_to:
+  - "bpf-all"
   - "rust-all"
   - "samples-all"
 fragment_ref: null

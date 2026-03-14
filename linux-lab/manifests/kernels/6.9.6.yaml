@@ -5,6 +5,7 @@ supported_arches:
 supported_profiles:
   - "debug"
   - "bpf"
+  - "bpf-all"
   - "rust"
   - "rust-all"
   - "samples"

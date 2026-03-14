@@ -71,7 +71,7 @@ def test_full_samples_meta_profile_expands_to_broad_concrete_profiles() -> None:
         mirror=None,
     )
 
-    assert request.profiles == ["rust-all", "samples-all"]
+    assert request.profiles == ["bpf-all", "rust-all", "samples-all"]
 
 
 def test_validate_is_read_only() -> None:

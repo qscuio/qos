@@ -30,10 +30,15 @@ def _resolve_example_groups(manifests, request) -> list[str]:
 
 def _execute(request, manifests, request_root: Path) -> dict:
     example_groups = _resolve_example_groups(manifests, request)
+    arch_manifest = manifests.arches[request.arch]
     example_plans = resolve_example_plan(
         example_groups=example_groups,
         linux_lab_root=_linux_lab_root(),
         build_root=request_root / "workspace" / "build",
+        kernel_tree=request_root / "workspace" / "kernel" / f"linux-{request.kernel_version}",
+        arch=request.arch,
+        toolchain_prefix=arch_manifest.toolchain_prefix,
+        kernel_version=request.kernel_version,
     )
     status = "placeholder"
     if request.command == "run" and request.dry_run:

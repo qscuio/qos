@@ -34,6 +34,17 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def _validate_build_commands(path: Path, item: dict[str, Any]) -> None:
+    build_commands = item.get("build_commands")
+    if build_commands is None:
+        return
+    if not isinstance(build_commands, list):
+        raise ValueError(f"{path} build_commands must be a list")
+    for index, command in enumerate(build_commands):
+        if not isinstance(command, list) or not command or not all(isinstance(part, str) for part in command):
+            raise ValueError(f"{path} build_commands[{index}] must be a non-empty list of strings")
+
+
 def load_example_catalog(root: Path) -> dict[str, dict[str, Any]]:
     catalog: dict[str, dict[str, Any]] = {}
     for path in sorted(root.glob("*.yaml")):
@@ -45,6 +56,7 @@ def load_example_catalog(root: Path) -> dict[str, dict[str, Any]]:
             raise ValueError(f"{path} has unsupported kind: {item['kind']!r}")
         if item["build_mode"] not in ALLOWED_BUILD_MODES:
             raise ValueError(f"{path} has unsupported build_mode: {item['build_mode']!r}")
+        _validate_build_commands(path, item)
         key = item["key"]
         if key in catalog:
             raise ValueError(f"duplicate example catalog key: {key}")

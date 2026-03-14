@@ -98,6 +98,46 @@ def _write_example_catalog_entry(root: Path, key: str, kind: str, category: str,
     )
 
 
+def _write_custom_example_catalog_entry(
+    root: Path,
+    *,
+    key: str,
+    kind: str,
+    category: str,
+    source: str,
+    groups: list[str],
+    build_commands: list[list[str]],
+) -> None:
+    catalog_root = root / "catalog" / "examples"
+    catalog_root.mkdir(parents=True, exist_ok=True)
+    lines = [
+        f'key: "{key}"',
+        f'kind: "{kind}"',
+        f'category: "{category}"',
+        f'source: "{source}"',
+        f'origin: "../qulk/modules/{key}"',
+        'build_mode: "custom-make"',
+        "groups:",
+    ]
+    for group in groups:
+        lines.append(f'  - "{group}"')
+    lines.extend(
+        [
+            "build_commands:",
+        ]
+    )
+    for command in build_commands:
+        rendered = ", ".join(f'"{part}"' for part in command)
+        lines.append(f"  - [{rendered}]")
+    lines.extend(
+        [
+            "enabled: true",
+            "",
+        ]
+    )
+    (catalog_root / f"{key}.yaml").write_text("\n".join(lines), encoding="utf-8")
+
+
 def _make_request(tmp_path: Path) -> object:
     return SimpleNamespace(
         kernel_version="fixture",
@@ -272,6 +312,7 @@ def test_build_examples_stage_executes_local_example_plan(tmp_path: Path, monkey
     request.profiles = ["default-lab"]
     manifests = SimpleNamespace(
         kernels={"fixture": SimpleNamespace(tool_groups=[], example_groups=[])},
+        arches={"x86_64": SimpleNamespace(toolchain_prefix="")},
         profiles={
             "default-lab": SimpleNamespace(
                 example_groups=["modules-core", "userspace-core", "rust-core", "bpf-core"],
@@ -292,3 +333,58 @@ def test_build_examples_stage_executes_local_example_plan(tmp_path: Path, monkey
     assert (rust_user / "rust-user.ok").read_text(encoding="utf-8") == "built"
     for obj in ("hello.o", "packet_filter.o", "tracing.o", "xdp.o", "open.o"):
         assert (bpf_dir / obj).is_file()
+
+
+def test_build_examples_stage_executes_catalog_custom_build_commands(tmp_path: Path, monkeypatch) -> None:
+    build_examples_mod = _load_module("linux_lab_build_examples_custom_live", BUILD_EXAMPLES_STAGE)
+    state_mod = _load_module("linux_lab_state_examples_custom_live", STATE_MODULE)
+
+    labroot = tmp_path / "labroot"
+    custom_dir = labroot / "examples" / "modules" / "custom"
+    custom_dir.mkdir(parents=True, exist_ok=True)
+    _write_custom_example_catalog_entry(
+        labroot,
+        key="custom-example",
+        kind="module",
+        category="custom",
+        source="linux-lab/examples/modules/custom",
+        groups=["modules-all"],
+        build_commands=[
+            [
+                "python3",
+                "-c",
+                "from pathlib import Path; Path(r'{entry_root}/custom.ok').write_text('|'.join([r'{build_root}', r'{kernel_tree}', r'{arch}', r'{toolchain_prefix}']), encoding='utf-8')",
+            ]
+        ],
+    )
+    monkeypatch.setenv("LINUX_LAB_ROOT_OVERRIDE", str(labroot))
+
+    request = _make_request(tmp_path)
+    request.profiles = ["full-samples"]
+    manifests = SimpleNamespace(
+        kernels={"fixture": SimpleNamespace(tool_groups=[], example_groups=[])},
+        arches={"x86_64": SimpleNamespace(toolchain_prefix="x86_64-linux-gnu-")},
+        profiles={
+            "full-samples": SimpleNamespace(
+                example_groups=["modules-all"],
+                tool_groups=[],
+            )
+        },
+    )
+    request_root = Path(request.artifact_root)
+    state_mod.ensure_request_dirs(request_root)
+    (request_root / "workspace" / "build").mkdir(parents=True, exist_ok=True)
+    (request_root / "workspace" / "kernel" / "linux-fixture").mkdir(parents=True, exist_ok=True)
+
+    result = build_examples_mod.STAGE.executor(request, manifests, request_root)
+
+    assert result["status"] == "succeeded"
+    custom_text = (custom_dir / "custom.ok").read_text(encoding="utf-8")
+    assert custom_text == "|".join(
+        [
+            str(request_root / "workspace" / "build"),
+            str(request_root / "workspace" / "kernel" / "linux-fixture"),
+            "x86_64",
+            "x86_64-linux-gnu-",
+        ]
+    )

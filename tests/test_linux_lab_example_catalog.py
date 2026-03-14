@@ -99,17 +99,29 @@ def test_catalog_covers_all_qulk_module_roots() -> None:
         assert source_path.exists(), f"catalog source path does not exist: {source_path}"
 
 
-def test_broad_enabled_sample_set_excludes_custom_make_entries() -> None:
-    module = _load_module("linux_lab_example_catalog_safe_bucket", MODULE_PATH)
+def test_custom_make_entries_are_explicitly_wired_and_enabled() -> None:
+    module = _load_module("linux_lab_example_catalog_custom_make", MODULE_PATH)
     catalog = module.load_example_catalog(CATALOG_ROOT)
 
-    enabled_custom = sorted(
-        item["key"]
+    custom_entries = sorted(
+        (item["key"], item.get("build_commands"))
         for item in catalog.values()
-        if item["enabled"] and item["build_mode"] == "custom-make"
+        if item["build_mode"] == "custom-make"
     )
+    custom_keys = [key for key, _commands in custom_entries]
 
-    assert enabled_custom == []
+    assert custom_keys == [
+        "LiME",
+        "afxdp",
+        "bds_lkm_ftrace",
+        "kernel-hook-framework",
+        "linux_kernel_hacking",
+        "sBPF",
+        "xdp_ipv6_filter",
+    ]
+    for key, commands in custom_entries:
+        assert catalog[key]["enabled"] is True
+        assert commands, f"{key} is missing explicit build_commands"
     assert catalog["rust"]["enabled"] is True
     assert catalog["rust"]["build_mode"] == "kernel-tree-rust"
 

@@ -142,10 +142,12 @@ def test_full_samples_profile_emits_broad_example_metadata() -> None:
         "modules-all",
         "userspace-all",
         "rust-all",
+        "bpf-all",
     ]
     assert len(example_plans[0]["entries"]) > 3
     assert any(entry["key"] == "hello" for entry in example_plans[0]["entries"])
     assert any(entry["key"] == "rust" for entry in example_plans[2]["entries"])
+    assert any(entry["key"] == "afxdp" for entry in example_plans[3]["entries"])
 
 
 def test_minimal_profile_omits_optional_example_metadata() -> None:

@@ -4,6 +4,102 @@ category: core
 source: linux-lab/examples/modules/core/linux_kernel_hacking
 origin: ../qulk/modules/linux_kernel_hacking
 build_mode: custom-make
+build_commands:
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/0_Basic_LKMs/0.0_Basic
+  - modules
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/0_Basic_LKMs/0.1_device_file
+  - modules
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/1_Livepatch/1.0_livepatch_sample
+  - modules
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/3_RootkitTechniques/3.0_hiding_lkm
+  - modules
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/3_RootkitTechniques/3.1_syscall_hooking
+  - modules
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/3_RootkitTechniques/3.2_kill_signalling
+  - modules
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/3_RootkitTechniques/3.3_set_root
+  - modules
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/3_RootkitTechniques/3.4_hiding_directories
+  - modules
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/3_RootkitTechniques/3.5_hiding_processes
+  - modules
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/3_RootkitTechniques/3.6_hiding_ports
+  - modules
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/3_RootkitTechniques/3.7_char_interfering
+  - modules
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/3_RootkitTechniques/3.8_privileged_container_escaping
+  - modules
+- - make
+  - -C
+  - '{build_root}'
+  - ARCH={arch}
+  - CROSS_COMPILE={toolchain_prefix}
+  - M={entry_root}/3_RootkitTechniques/3.9_hiding_logged_in_users
+  - modules
+- - gcc
+  - -o
+  - '{entry_root}/3_RootkitTechniques/3.9_hiding_logged_in_users/enum_utmp'
+  - '{entry_root}/3_RootkitTechniques/3.9_hiding_logged_in_users/enum_utmp.c'
 runtime_helpers:
 - guest_insmod
 - guest_rmmods
@@ -13,5 +109,6 @@ tags:
 - linux_kernel_hacking
 groups:
 - modules-all
-enabled: false
-notes: Imported breadth-first from qulk; not yet enabled in the default build flow.
+enabled: true
+notes: Imported from qulk with explicit linux-lab build commands for the buildable
+  sublabs in this corpus entry.

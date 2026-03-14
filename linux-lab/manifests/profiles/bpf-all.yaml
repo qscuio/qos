@@ -1,0 +1,18 @@
+key: "bpf-all"
+kind: "concrete"
+precedence: 20
+replaces: []
+expands_to: []
+fragment_ref: "linux-lab/fragments/bpf.conf"
+compatible_kernels:
+  - "*"
+compatible_arches:
+  - "*"
+host_tools:
+  - "clang"
+  - "llvm"
+tool_groups:
+  - "bpf-core"
+example_groups:
+  - "bpf-all"
+post_build_refs: []

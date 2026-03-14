@@ -4,6 +4,19 @@ category: security
 source: linux-lab/examples/modules/security/kernel-hook-framework
 origin: ../qulk/modules/kernel-hook-framework
 build_mode: custom-make
+build_commands:
+- - make
+  - -C
+  - '{entry_root}/src'
+  - '{arch}'
+  - KDIR={build_root}
+  - CROSS_COMPILE={toolchain_prefix}
+- - make
+  - -C
+  - '{entry_root}/sample'
+  - '{arch}'
+  - KDIR={build_root}
+  - CROSS_COMPILE={toolchain_prefix}
 runtime_helpers:
 - guest_insmod
 - guest_rmmods
@@ -13,5 +26,5 @@ tags:
 - kernel-hook-framework
 groups:
 - modules-all
-enabled: false
-notes: Imported breadth-first from qulk; not yet enabled in the default build flow.
+enabled: true
+notes: Imported from qulk with explicit linux-lab arch-aware build commands.
