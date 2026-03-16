@@ -219,3 +219,10 @@ def test_example_planner_respects_catalog_group_membership(tmp_path: Path) -> No
 
     assert [entry["key"] for entry in core_plan[0]["entries"]] == ["simple"]
     assert [entry["key"] for entry in full_plan[0]["entries"]] == ["simple", "hello"]
+
+
+def test_mm_experiments_group_is_registered_in_example_planner() -> None:
+    module = _load_module("linux_lab_examples_mm_reg", EXAMPLES_MODULE_PATH)
+    assert "mm-experiments" in module.EXAMPLE_GROUP_ORDER
+    assert module.GROUP_KIND_MAP.get("mm-experiments") == "userspace"
+    assert "mm-experiments" in module.GROUP_ENTRY_PRIORITY
