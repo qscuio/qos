@@ -1,0 +1,19 @@
+key: mm-uffd
+kind: userspace
+category: memory
+source: linux-lab/experiments/mm/uffd
+origin: qos-native
+build_mode: custom-make
+build_commands:
+  - ["gcc", "-g", "-O0", "-Wall", "-Wextra",
+     "-o", "{entry_root}/uffd",
+     "{entry_root}/uffd.c",
+     "-lpthread"]
+tags:
+  - userspace
+  - mm
+  - userfaultfd
+groups:
+  - mm-experiments
+enabled: true
+notes: Registers a mapping with userfaultfd; handler thread serves UFFD_EVENT_PAGEFAULT.

@@ -179,6 +179,34 @@ def test_minimal_profile_omits_optional_example_metadata() -> None:
     assert example_state["metadata"]["example_plans"] == []
 
 
+def test_mm_experiments_entries_appear_in_default_lab_dry_run() -> None:
+    result = _run(
+        [
+            str(BIN_LINUX_LAB),
+            "run",
+            "--kernel", "6.18.4",
+            "--arch", "x86_64",
+            "--image", "noble",
+            "--profile", "default-lab",
+            "--dry-run",
+        ]
+    )
+    assert result.returncode == 0, result.stderr
+
+    request_root = _latest_request_root()
+    example_state = json.loads(
+        (request_root / "state" / "build-examples.json").read_text(encoding="utf-8")
+    )
+    mm_plan = next(
+        (item for item in example_state["metadata"]["example_plans"]
+         if item["group"] == "mm-experiments"),
+        None,
+    )
+    assert mm_plan is not None, "mm-experiments group missing from default-lab dry-run"
+    mm_keys = {entry["key"] for entry in mm_plan["entries"]}
+    assert mm_keys == {"mm-anon-fault", "mm-cow-fault", "mm-zero-page", "mm-uffd"}
+
+
 def test_mm_experiment_source_files_exist() -> None:
     expected = [
         ROOT / "linux-lab" / "experiments" / "mm" / "anon_fault" / "anon_fault.c",
