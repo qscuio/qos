@@ -15,6 +15,7 @@ EXAMPLE_GROUP_ORDER = [
     "userspace-all",
     "rust-all",
     "bpf-all",
+    "mm-experiments",
 ]
 GROUP_KIND_MAP = {
     "modules-core": "module",
@@ -25,6 +26,7 @@ GROUP_KIND_MAP = {
     "userspace-all": "userspace",
     "rust-all": "rust",
     "bpf-all": "bpf",
+    "mm-experiments": "userspace",
 }
 GROUP_ENTRY_PRIORITY = {
     "modules-core": ["modules-debug", "simple", "ioctl"],
@@ -35,6 +37,7 @@ GROUP_ENTRY_PRIORITY = {
     "userspace-all": ["userspace-app"],
     "rust-all": ["rust_learn"],
     "bpf-all": ["bpf-learn"],
+    "mm-experiments": ["mm-anon-fault", "mm-cow-fault", "mm-zero-page", "mm-uffd"],
 }
 
 
@@ -346,6 +349,15 @@ def resolve_example_plan(
         ),
         "bpf-all": lambda: _bpf_plan(
             "bpf-all",
+            linux_lab_root,
+            build_root=build_root,
+            kernel_tree=kernel_tree,
+            arch=arch,
+            toolchain_prefix=toolchain_prefix,
+            kernel_version=kernel_version,
+        ),
+        "mm-experiments": lambda: _userspace_plan(
+            "mm-experiments",
             linux_lab_root,
             build_root=build_root,
             kernel_tree=kernel_tree,
