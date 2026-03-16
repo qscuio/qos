@@ -8,6 +8,7 @@ expands_to:
   - "rust"
   - "samples"
   - "debug-tools"
+  - "mm-experiments"
 fragment_ref: null
 compatible_kernels:
   - "*"

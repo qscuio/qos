@@ -11,6 +11,7 @@ supported_profiles:
   - "samples"
   - "samples-all"
   - "debug-tools"
+  - "mm-experiments"
   - "minimal"
 required_profiles: []
 default_compat: false
