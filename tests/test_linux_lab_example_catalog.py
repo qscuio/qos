@@ -116,6 +116,7 @@ def test_custom_make_entries_are_explicitly_wired_and_enabled() -> None:
         "bds_lkm_ftrace",
         "kernel-hook-framework",
         "linux_kernel_hacking",
+        "mm-uffd",
         "sBPF",
         "xdp_ipv6_filter",
     ]
@@ -219,6 +220,22 @@ def test_example_planner_respects_catalog_group_membership(tmp_path: Path) -> No
 
     assert [entry["key"] for entry in core_plan[0]["entries"]] == ["simple"]
     assert [entry["key"] for entry in full_plan[0]["entries"]] == ["simple", "hello"]
+
+
+def test_mm_experiments_catalog_entries_are_valid_and_enabled() -> None:
+    module = _load_module("linux_lab_example_catalog_mm", MODULE_PATH)
+    catalog = module.load_example_catalog(CATALOG_ROOT)
+
+    mm_keys = {"mm-anon-fault", "mm-cow-fault", "mm-zero-page", "mm-uffd"}
+    assert mm_keys.issubset(catalog), f"missing mm catalog entries: {mm_keys - catalog.keys()}"
+
+    for key in mm_keys:
+        entry = catalog[key]
+        assert entry["enabled"] is True
+        assert entry["kind"] == "userspace"
+        assert entry["category"] == "memory"
+        assert entry["build_mode"] in {"gcc-userspace", "custom-make"}
+        assert "mm-experiments" in entry.get("groups", [])
 
 
 def test_mm_experiments_group_is_registered_in_example_planner() -> None:

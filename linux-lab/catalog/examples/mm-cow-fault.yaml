@@ -1,0 +1,14 @@
+key: mm-cow-fault
+kind: userspace
+category: memory
+source: linux-lab/experiments/mm/cow_fault
+origin: qos-native
+build_mode: gcc-userspace
+tags:
+  - userspace
+  - mm
+  - cow
+groups:
+  - mm-experiments
+enabled: true
+notes: Triggers copy-on-write fault path (handle_mm_fault -> do_wp_page).

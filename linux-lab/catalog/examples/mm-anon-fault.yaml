@@ -1,0 +1,14 @@
+key: mm-anon-fault
+kind: userspace
+category: memory
+source: linux-lab/experiments/mm/anon_fault
+origin: qos-native
+build_mode: gcc-userspace
+tags:
+  - userspace
+  - mm
+  - page-fault
+groups:
+  - mm-experiments
+enabled: true
+notes: Triggers anonymous page fault path (handle_mm_fault -> do_anonymous_page).

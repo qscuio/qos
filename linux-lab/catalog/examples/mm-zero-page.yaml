@@ -1,0 +1,15 @@
+key: mm-zero-page
+kind: userspace
+category: memory
+source: linux-lab/experiments/mm/zero_page
+origin: qos-native
+build_mode: gcc-userspace
+tags:
+  - userspace
+  - mm
+  - zero-page
+  - madvise
+groups:
+  - mm-experiments
+enabled: true
+notes: Triggers zero-page re-fault path via madvise(MADV_DONTNEED) + re-read.
