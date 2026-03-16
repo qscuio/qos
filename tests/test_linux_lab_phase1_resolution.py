@@ -53,7 +53,7 @@ def test_manifest_defaults_and_schema_contract() -> None:
     assert request.kernel_version == "6.18.4"
     assert request.image_release == "noble"
     assert request.arch == "x86_64"
-    assert request.profiles == ["debug", "bpf", "rust", "samples", "debug-tools"]
+    assert request.profiles == ["debug", "bpf", "rust", "samples", "debug-tools", "mm-experiments"]
     assert request.artifact_root.name == request.request_fingerprint
 
 

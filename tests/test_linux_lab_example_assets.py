@@ -115,6 +115,7 @@ def test_run_dry_run_emits_example_metadata() -> None:
         "userspace-core",
         "rust-core",
         "bpf-core",
+        "mm-experiments",
     ]
     rust_plan = next(item for item in example_plans if item["group"] == "rust-core")
     assert [entry["key"] for entry in rust_plan["entries"]] == ["rust_learn"]
@@ -176,3 +177,14 @@ def test_minimal_profile_omits_optional_example_metadata() -> None:
     assert example_state["status"] == "dry-run"
     assert example_state["metadata"]["example_groups"] == []
     assert example_state["metadata"]["example_plans"] == []
+
+
+def test_mm_experiment_source_files_exist() -> None:
+    expected = [
+        ROOT / "linux-lab" / "experiments" / "mm" / "anon_fault" / "anon_fault.c",
+        ROOT / "linux-lab" / "experiments" / "mm" / "cow_fault" / "cow_fault.c",
+        ROOT / "linux-lab" / "experiments" / "mm" / "zero_page" / "zero_page.c",
+        ROOT / "linux-lab" / "experiments" / "mm" / "uffd" / "uffd.c",
+    ]
+    missing = [str(p) for p in expected if not p.is_file()]
+    assert missing == [], f"missing mm experiment source files: {missing}"
