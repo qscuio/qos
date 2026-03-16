@@ -119,3 +119,12 @@ def test_invalid_mirror_is_rejected() -> None:
     )
     assert result.returncode != 0
     assert "mirror" in result.stderr.lower()
+
+
+def test_mm_experiments_profile_loads_and_has_correct_example_group() -> None:
+    manifests_mod = _load_module("linux_lab_manifests_mm", MANIFESTS_MODULE)
+    manifests = manifests_mod.load_manifests(LINUX_LAB_ROOT / "manifests")
+    assert "mm-experiments" in manifests.profiles
+    profile = manifests.profiles["mm-experiments"]
+    assert profile.kind == "concrete"
+    assert "mm-experiments" in profile.example_groups

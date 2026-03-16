@@ -1,0 +1,15 @@
+key: "mm-experiments"
+kind: "concrete"
+precedence: 60
+replaces: []
+expands_to: []
+fragment_ref: null
+compatible_kernels:
+  - "*"
+compatible_arches:
+  - "*"
+host_tools: []
+tool_groups: []
+example_groups:
+  - "mm-experiments"
+post_build_refs: []
