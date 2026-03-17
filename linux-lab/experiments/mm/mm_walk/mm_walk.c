@@ -37,6 +37,7 @@
 #include <linux/proc_fs.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
+#include <linux/mutex.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
 
@@ -46,6 +47,7 @@ MODULE_DESCRIPTION("On-demand page table walker via /proc/mm_walk");
 #define RESULT_BUF_SIZE 1024
 
 static char result_buf[RESULT_BUF_SIZE];
+static DEFINE_MUTEX(mm_walk_lock);
 static struct proc_dir_entry *proc_entry;
 
 /* ── page table walk ───────────────────────────────────────────────── */
@@ -54,6 +56,7 @@ static void do_walk(pid_t target_pid, unsigned long va)
 {
     struct task_struct *task;
     struct mm_struct *mm;
+    struct pid *pid_struct;
     pgd_t *pgd;
     p4d_t *p4d;
     pud_t *pud;
@@ -65,7 +68,9 @@ static void do_walk(pid_t target_pid, unsigned long va)
                     "mm_walk: PID=%d VA=0x%lx\n", target_pid, va);
     pr_info("%s", result_buf);
 
-    task = get_pid_task(find_get_pid(target_pid), PIDTYPE_PID);
+    pid_struct = find_get_pid(target_pid);
+    task = get_pid_task(pid_struct, PIDTYPE_PID);
+    put_pid(pid_struct);
     if (!task) {
         len += snprintf(result_buf + len, RESULT_BUF_SIZE - len,
                         "  error: pid %d not found\n", target_pid);
@@ -162,9 +167,7 @@ static void do_walk(pid_t target_pid, unsigned long va)
         len += snprintf(result_buf + len, RESULT_BUF_SIZE - len,
                         "  PTE: not present\n");
     }
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 7, 0)
     pte_unmap(pte);
-#endif
 
 out:
     mmap_read_unlock(mm);
@@ -177,8 +180,12 @@ out:
 static ssize_t mm_walk_read(struct file *file, char __user *buf,
                             size_t count, loff_t *ppos)
 {
-    return simple_read_from_buffer(buf, count, ppos,
-                                   result_buf, strlen(result_buf));
+    ssize_t ret;
+    mutex_lock(&mm_walk_lock);
+    ret = simple_read_from_buffer(buf, count, ppos,
+                                  result_buf, strlen(result_buf));
+    mutex_unlock(&mm_walk_lock);
+    return ret;
 }
 
 /* ── /proc write ───────────────────────────────────────────────────── */
@@ -199,8 +206,10 @@ static ssize_t mm_walk_write(struct file *file, const char __user *buf,
     if (sscanf(kbuf, "%d %li", &pid, &va) != 2)
         return -EINVAL;
 
+    mutex_lock(&mm_walk_lock);
     memset(result_buf, 0, sizeof(result_buf));
     do_walk(pid, va);
+    mutex_unlock(&mm_walk_lock);
     return (ssize_t)count;
 }
 
