@@ -56,7 +56,7 @@ def test_plan_writes_request_and_placeholder_stage_state() -> None:
     boot_state = json.loads(boot_json.read_text(encoding="utf-8"))
 
     assert request["kernel_version"] == "6.18.4"
-    assert request["profiles"] == ["debug", "bpf", "rust", "samples", "debug-tools"]
+    assert request["profiles"] == ["debug", "bpf", "rust", "samples", "debug-tools", "mm-experiments"]
     assert validate_state["stage"] == "validate"
     assert validate_state["status"] == "succeeded"
     assert boot_state["stage"] == "boot"

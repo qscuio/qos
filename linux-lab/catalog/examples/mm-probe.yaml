@@ -1,0 +1,14 @@
+key: mm-probe
+kind: module
+category: memory
+source: linux-lab/experiments/mm/mm_probe
+origin: qos-native
+build_mode: kbuild-module
+tags:
+  - module
+  - mm
+  - kprobe
+groups:
+  - mm-probe
+enabled: true
+notes: kprobe module that instruments do_anonymous_page, do_wp_page, and handle_userfault — the three kernel fault handlers triggered by the mm experiments.
