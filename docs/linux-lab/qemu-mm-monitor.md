@@ -71,7 +71,7 @@ If the page is not present (not yet faulted in), the command fails.
 
 Success:
 ```
-0x00055a3f2b01000 -> 0x000000001a4f7000
+gva2gpa 0x55a3f2b01000 -> 0x000000001a4f7000
 ```
 
 Failure (page not present):
@@ -111,7 +111,7 @@ This shows `do_anonymous_page()` made visible at the hardware level:
 5. Translate again:
    ```
    (qemu) gva2gpa 0x55a3f2b01000
-   → 0x00055a3f2b01000 -> 0x000000001a4f7000   ← real PA
+   → gva2gpa 0x55a3f2b01000 -> 0x000000001a4f7000   ← real PA
    ```
 
 6. Read the byte back from physical memory:

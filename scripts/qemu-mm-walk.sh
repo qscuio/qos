@@ -31,7 +31,7 @@ fi
 # Pick a monitor client tool
 if command -v socat &>/dev/null; then
     send_cmd() { printf '%s\n' "$1" | socat - "UNIX-CONNECT:${SOCK}" 2>/dev/null; }
-elif nc -U /dev/null 2>/dev/null; then
+elif nc -h 2>&1 | grep -q -- '-U'; then
     send_cmd() { printf '%s\n' "$1" | nc -U "$SOCK" 2>/dev/null; }
 else
     echo "Error: neither socat nor nc (with -U) found"
