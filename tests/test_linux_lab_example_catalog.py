@@ -264,3 +264,17 @@ def test_mm_probe_group_is_registered_in_example_planner() -> None:
     assert "mm-probe" in module.EXAMPLE_GROUP_ORDER
     assert module.GROUP_KIND_MAP.get("mm-probe") == "module"
     assert "mm-probe" in module.GROUP_ENTRY_PRIORITY
+
+
+def test_mm_va_to_pa_catalog_entry_is_valid() -> None:
+    module = _load_module("linux_lab_example_catalog_mm_va_to_pa", MODULE_PATH)
+    catalog = module.load_example_catalog(CATALOG_ROOT)
+    assert "mm-va-to-pa" in catalog
+    entry = catalog["mm-va-to-pa"]
+    assert entry["enabled"] is True
+    assert entry["kind"] == "userspace"
+    assert entry["category"] == "memory"
+    assert entry["origin"] == "qos-native"
+    assert entry["build_mode"] == "gcc-userspace"
+    assert entry["source"] == "linux-lab/experiments/mm/va_to_pa"
+    assert "mm-experiments" in entry.get("groups", [])

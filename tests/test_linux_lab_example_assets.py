@@ -205,7 +205,7 @@ def test_mm_experiments_entries_appear_in_default_lab_dry_run() -> None:
     )
     assert mm_plan is not None, "mm-experiments group missing from default-lab dry-run"
     mm_keys = {entry["key"] for entry in mm_plan["entries"]}
-    assert mm_keys == {"mm-anon-fault", "mm-cow-fault", "mm-zero-page", "mm-uffd"}
+    assert mm_keys == {"mm-anon-fault", "mm-cow-fault", "mm-zero-page", "mm-uffd", "mm-va-to-pa"}
 
 
 def test_mm_experiment_source_files_exist() -> None:

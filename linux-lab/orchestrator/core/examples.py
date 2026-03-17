@@ -39,7 +39,7 @@ GROUP_ENTRY_PRIORITY = {
     "userspace-all": ["userspace-app"],
     "rust-all": ["rust_learn"],
     "bpf-all": ["bpf-learn"],
-    "mm-experiments": ["mm-anon-fault", "mm-cow-fault", "mm-zero-page", "mm-uffd"],
+    "mm-experiments": ["mm-anon-fault", "mm-cow-fault", "mm-zero-page", "mm-uffd", "mm-va-to-pa"],
     "mm-probe": ["mm-probe"],
 }
 

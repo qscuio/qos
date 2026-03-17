@@ -1,0 +1,19 @@
+key: mm-va-to-pa
+kind: userspace
+category: memory
+source: linux-lab/experiments/mm/va_to_pa
+origin: qos-native
+build_mode: gcc-userspace
+tags:
+  - userspace
+  - mm
+  - page-fault
+  - pagemap
+groups:
+  - mm-experiments
+enabled: true
+notes: >
+  Reads /proc/self/pagemap to show VA->PA translation for a stack variable,
+  a heap page before/after first touch (demand paging), and a fork (CoW).
+  Must be run with sudo — PFN field in pagemap requires CAP_SYS_ADMIN since
+  kernel 4.0.
