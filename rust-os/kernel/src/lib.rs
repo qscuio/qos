@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(test)]
+extern crate std;
+
 use core::cell::UnsafeCell;
 use core::ffi::CStr;
 use core::hint::spin_loop;
@@ -1626,6 +1629,11 @@ pub fn vmm_map_as(asid: u32, va: u64, pa: u64, flags: u32) -> Result<(), KernelE
 
         state.pas[idx] = pa;
         state.flags[idx] = flags;
+        #[cfg(all(feature = "mm-debug", test))]
+        std::eprintln!(
+            "[mm_debug] vmm_map_as: asid={} VA={:#x} -> PA={:#x} PFN={:#x} flags={:#x}",
+            asid, va, pa, pa >> 12, flags
+        );
         Ok(())
     })();
     mm_unlock();

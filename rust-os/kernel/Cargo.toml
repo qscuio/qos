@@ -8,3 +8,6 @@ path = "src/lib.rs"
 
 [dependencies]
 qos-boot = { path = "../boot" }
+
+[features]
+mm-debug = []
