@@ -12,4 +12,5 @@ host_tools: []
 tool_groups: []
 example_groups:
   - "mm-experiments"
+  - "mm-probe"
 post_build_refs: []

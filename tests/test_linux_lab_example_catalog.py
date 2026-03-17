@@ -243,3 +243,24 @@ def test_mm_experiments_group_is_registered_in_example_planner() -> None:
     assert "mm-experiments" in module.EXAMPLE_GROUP_ORDER
     assert module.GROUP_KIND_MAP.get("mm-experiments") == "userspace"
     assert "mm-experiments" in module.GROUP_ENTRY_PRIORITY
+
+
+def test_mm_probe_catalog_entry_is_valid() -> None:
+    module = _load_module("linux_lab_example_catalog_mm_probe", MODULE_PATH)
+    catalog = module.load_example_catalog(CATALOG_ROOT)
+    assert "mm-probe" in catalog
+    entry = catalog["mm-probe"]
+    assert entry["enabled"] is True
+    assert entry["kind"] == "module"
+    assert entry["category"] == "memory"
+    assert entry["origin"] == "qos-native"
+    assert entry["build_mode"] == "kbuild-module"
+    assert entry["source"] == "linux-lab/experiments/mm/mm_probe"
+    assert "mm-probe" in entry.get("groups", [])
+
+
+def test_mm_probe_group_is_registered_in_example_planner() -> None:
+    module = _load_module("linux_lab_examples_mm_probe_reg", EXAMPLES_MODULE_PATH)
+    assert "mm-probe" in module.EXAMPLE_GROUP_ORDER
+    assert module.GROUP_KIND_MAP.get("mm-probe") == "module"
+    assert "mm-probe" in module.GROUP_ENTRY_PRIORITY
