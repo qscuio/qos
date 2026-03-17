@@ -103,7 +103,9 @@ allocation.
 - `examples.py`: add `"mm-walk"` to `EXAMPLE_GROUP_ORDER` (after `"mm-probe"`),
   `GROUP_KIND_MAP["mm-walk"] = "module"`,
   `GROUP_ENTRY_PRIORITY["mm-walk"] = ["mm-walk"]`,
-  and a `"mm-walk"` lambda dispatching to `_modules_plan`.
+  and a `"mm-walk"` lambda in the `planners` dict inside `resolve_example_plan`
+  dispatching to `_modules_plan` — matching the mm-probe lambda pattern exactly
+  (positional `build_root`, not keyword).
 - `mm-experiments.yaml`: add `"mm-walk"` to `example_groups`.
 
 ### Experiment 3: QEMU monitor guide
@@ -134,31 +136,48 @@ page not present), step over the write, run `gva2gpa` again (succeeds), then
 
 ### Experiment 4: c-os / rust-os `MM_DEBUG`
 
-**C (`c-os/kernel/mm/mm.c` — `qos_vmm_map`):**
+**C (`c-os/kernel/mm/mm.c` — `qos_vmm_map_as`):**
+
+The actual mapping writes (`g_vas[asid][idx] = page_va` and `g_pas[asid][idx] = pa`)
+are in `qos_vmm_map_as`, not in the one-liner wrapper `qos_vmm_map`. The debug block
+goes in `qos_vmm_map_as` immediately after those writes:
 
 ```c
 #ifdef QOS_MM_DEBUG
-    printf("[mm_debug] vmm_map: VA=0x%lx -> PA=0x%lx PFN=0x%lx flags=0x%x\n",
+    printf("[mm_debug] vmm_map_as: VA=0x%lx -> PA=0x%lx PFN=0x%lx flags=0x%x\n",
            (unsigned long)va, (unsigned long)pa,
            (unsigned long)(pa >> 12), flags);
 #endif
 ```
 
-Added immediately after the mapping is written (`g_vas[asid][idx] = page_va` and
-`g_pas[asid][idx] = pa`). Requires `#include <stdio.h>` added to `mm.c` (not
-currently present). Enabled by `-DQOS_MM_DEBUG` in the build.
+Requires `#include <stdio.h>` added to `mm.c` (not currently present). Enabled by
+`-DQOS_MM_DEBUG` in the build.
 
 **Rust (`rust-os/kernel/src/lib.rs` — `vmm_map_as`):**
 
+`rust-os` is `#![no_std]`, so `println!` is not available in the library. The debug
+print is gated on both the feature flag *and* the test harness (which links `std`).
+**Note:** this means the print fires during `cargo test --features mm-debug`, not
+during actual bare-metal execution (where `std` is absent). This is the appropriate
+scope for a `no_std` teaching kernel — the test environment is where you observe it.
+
 ```rust
-#[cfg(feature = "mm-debug")]
-println!("[mm_debug] vmm_map_as: asid={} VA={:#x} -> PA={:#x} PFN={:#x} flags={:#x}",
-         asid, va, pa, pa >> 12, flags);
+// At crate root (top of lib.rs), after #![no_std]:
+#[cfg(test)]
+extern crate std;
+```
+
+```rust
+// Inside vmm_map_as, after the mapping is written:
+#[cfg(all(feature = "mm-debug", test))]
+std::eprintln!("[mm_debug] vmm_map_as: asid={} VA={:#x} -> PA={:#x} PFN={:#x} flags={:#x}",
+               asid, va, pa, pa >> 12, flags);
 ```
 
 Added immediately after the mapping is written to `g_vas`/`g_pas`. Enabled by
-adding `mm-debug = []` to `[features]` in `rust-os/kernel/Cargo.toml` and building
-with `--features mm-debug`.
+adding `mm-debug = []` to `[features]` in `rust-os/kernel/Cargo.toml` and running
+tests with `--features mm-debug`. In non-test (bare-metal) builds the block
+compiles away entirely.
 
 ## File Inventory
 
@@ -170,12 +189,13 @@ with `--features mm-debug`.
 | `linux-lab/experiments/mm/mm_walk/mm_walk.c` | Create |
 | `linux-lab/experiments/mm/mm_walk/Makefile` | Create |
 | `linux-lab/catalog/examples/mm-walk.yaml` | Create |
-| `linux-lab/orchestrator/core/examples.py` | Modify (group, kind, priority, lambda) |
+| `linux-lab/orchestrator/core/examples.py` | Modify (group, kind, priority, planners lambda) |
 | `linux-lab/manifests/profiles/mm-experiments.yaml` | Modify (add mm-walk group) |
+| `docs/linux-lab/` | Create directory (git tracks via first file; no `.gitkeep` needed) |
 | `docs/linux-lab/qemu-mm-monitor.md` | Create |
 | `scripts/qemu-mm-walk.sh` | Create |
-| `c-os/kernel/mm/mm.c` | Modify (MM_DEBUG block + stdio include) |
-| `rust-os/kernel/src/lib.rs` | Modify (mm-debug cfg block) |
+| `c-os/kernel/mm/mm.c` | Modify (MM_DEBUG block in qos_vmm_map_as + stdio include) |
+| `rust-os/kernel/src/lib.rs` | Modify (extern crate std under cfg(test), mm-debug cfg block in vmm_map_as) |
 | `rust-os/kernel/Cargo.toml` | Modify (add mm-debug feature) |
 
 ## Testing
@@ -190,6 +210,11 @@ with `--features mm-debug`.
 **Assets/dry-run tests (`tests/test_linux_lab_example_assets.py`):**
 - Update `test_run_dry_run_emits_example_metadata` expected group list to include
   `"mm-walk"` after `"mm-probe"`
+- Update `test_mm_experiments_entries_appear_in_default_lab_dry_run` (line 208):
+  the hardcoded set `{"mm-anon-fault", "mm-cow-fault", "mm-zero-page", "mm-uffd"}`
+  must include `"mm-va-to-pa"` once that entry joins the `mm-experiments` group.
+  This update must land in the same commit as the catalog entry and priority list
+  change (commit 1), or the test suite breaks between commits.
 
 **c-os / rust-os:** No new tests. The `#ifdef`/`#[cfg]` guards are inactive by
 default and do not affect existing test suites.
@@ -197,6 +222,10 @@ default and do not affect existing test suites.
 ## Commit Plan
 
 1. `feat(mm-observe): add va_to_pa userspace experiment and catalog entry`
+   — includes: `va_to_pa.c`, `mm-va-to-pa.yaml`, `GROUP_ENTRY_PRIORITY` update in
+   `examples.py`, and both test updates in `test_linux_lab_example_assets.py`
+   (`test_mm_experiments_entries_appear_in_default_lab_dry_run` and the catalog test
+   for `mm-va-to-pa`)
 2. `feat(mm-observe): add mm-walk kernel module with /proc interface`
 3. `feat(mm-observe): add QEMU monitor guide and helper script`
 4. `feat(mm-observe): add MM_DEBUG instrumentation to c-os and rust-os vmm_map`
