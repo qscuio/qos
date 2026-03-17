@@ -223,9 +223,17 @@ default and do not affect existing test suites.
 
 1. `feat(mm-observe): add va_to_pa userspace experiment and catalog entry`
    — includes: `va_to_pa.c`, `mm-va-to-pa.yaml`, `GROUP_ENTRY_PRIORITY` update in
-   `examples.py`, and both test updates in `test_linux_lab_example_assets.py`
-   (`test_mm_experiments_entries_appear_in_default_lab_dry_run` and the catalog test
-   for `mm-va-to-pa`)
+   `examples.py`, `test_mm_va_to_pa_catalog_entry_is_valid` (added to
+   `tests/test_linux_lab_example_catalog.py`), and
+   `test_mm_experiments_entries_appear_in_default_lab_dry_run` update (in
+   `tests/test_linux_lab_example_assets.py`)
 2. `feat(mm-observe): add mm-walk kernel module with /proc interface`
+   — includes: `mm_walk.c`, `Makefile`, `mm-walk.yaml`, orchestrator changes in
+   `examples.py` (EXAMPLE_GROUP_ORDER, GROUP_KIND_MAP, GROUP_ENTRY_PRIORITY, planners
+   lambda), `mm-experiments.yaml` profile update, `test_mm_walk_catalog_entry_is_valid`
+   and `test_mm_walk_group_is_registered_in_example_planner` (added to
+   `tests/test_linux_lab_example_catalog.py`), and
+   `test_run_dry_run_emits_example_metadata` update (in
+   `tests/test_linux_lab_example_assets.py`, adding `"mm-walk"` after `"mm-probe"`)
 3. `feat(mm-observe): add QEMU monitor guide and helper script`
 4. `feat(mm-observe): add MM_DEBUG instrumentation to c-os and rust-os vmm_map`
