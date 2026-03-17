@@ -18,7 +18,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -114,6 +113,11 @@ int main(void)
     printf("\n[4] fork — CoW demonstration\n");
     heap[0] = (char)0x11;
     parent_pa = va_to_pa(heap);
+    if (!parent_pa) {
+        fprintf(stderr, "    ERROR: could not read parent PA — run with sudo\n");
+        free(heap);
+        return 1;
+    }
     printf("    parent: VA=%p  PA=0x%lx  val=0x%02x\n",
            (void *)heap, (unsigned long)parent_pa, (unsigned char)heap[0]);
 
@@ -133,6 +137,7 @@ int main(void)
                (void *)heap, (unsigned long)child_pa_after,
                child_pa_after != parent_pa ? "YES" : "NO");
         free(heap);
+        fflush(stdout);
         _exit(0);
     }
 
