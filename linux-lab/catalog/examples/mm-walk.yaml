@@ -1,0 +1,18 @@
+key: mm-walk
+kind: module
+category: memory
+source: linux-lab/experiments/mm/mm_walk
+origin: qos-native
+build_mode: kbuild-module
+tags:
+  - module
+  - mm
+  - pagetable
+groups:
+  - mm-walk
+enabled: true
+notes: >
+  Kernel module that walks the 4-level page table (PGD->P4D->PUD->PMD->PTE)
+  for any PID+VA via a /proc/mm_walk interface. Write "<pid> <va>" to trigger
+  a walk; read to see the last result. Defaults: PID=1, VA=0x400000 (walked
+  once at insmod).

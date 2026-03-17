@@ -17,6 +17,7 @@ EXAMPLE_GROUP_ORDER = [
     "bpf-all",
     "mm-experiments",
     "mm-probe",
+    "mm-walk",
 ]
 GROUP_KIND_MAP = {
     "modules-core": "module",
@@ -29,6 +30,7 @@ GROUP_KIND_MAP = {
     "bpf-all": "bpf",
     "mm-experiments": "userspace",
     "mm-probe": "module",
+    "mm-walk": "module",
 }
 GROUP_ENTRY_PRIORITY = {
     "modules-core": ["modules-debug", "simple", "ioctl"],
@@ -41,6 +43,7 @@ GROUP_ENTRY_PRIORITY = {
     "bpf-all": ["bpf-learn"],
     "mm-experiments": ["mm-anon-fault", "mm-cow-fault", "mm-zero-page", "mm-uffd", "mm-va-to-pa"],
     "mm-probe": ["mm-probe"],
+    "mm-walk": ["mm-walk"],
 }
 
 
@@ -370,6 +373,15 @@ def resolve_example_plan(
         ),
         "mm-probe": lambda: _modules_plan(
             "mm-probe",
+            linux_lab_root,
+            build_root,
+            kernel_tree=kernel_tree,
+            arch=arch,
+            toolchain_prefix=toolchain_prefix,
+            kernel_version=kernel_version,
+        ),
+        "mm-walk": lambda: _modules_plan(
+            "mm-walk",
             linux_lab_root,
             build_root,
             kernel_tree=kernel_tree,

@@ -13,4 +13,5 @@ tool_groups: []
 example_groups:
   - "mm-experiments"
   - "mm-probe"
+  - "mm-walk"
 post_build_refs: []

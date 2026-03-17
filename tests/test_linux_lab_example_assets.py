@@ -117,6 +117,7 @@ def test_run_dry_run_emits_example_metadata() -> None:
         "bpf-core",
         "mm-experiments",
         "mm-probe",
+        "mm-walk",
     ]
     rust_plan = next(item for item in example_plans if item["group"] == "rust-core")
     assert [entry["key"] for entry in rust_plan["entries"]] == ["rust_learn"]

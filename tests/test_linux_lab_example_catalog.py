@@ -278,3 +278,24 @@ def test_mm_va_to_pa_catalog_entry_is_valid() -> None:
     assert entry["build_mode"] == "gcc-userspace"
     assert entry["source"] == "linux-lab/experiments/mm/va_to_pa"
     assert "mm-experiments" in entry.get("groups", [])
+
+
+def test_mm_walk_catalog_entry_is_valid() -> None:
+    module = _load_module("linux_lab_example_catalog_mm_walk", MODULE_PATH)
+    catalog = module.load_example_catalog(CATALOG_ROOT)
+    assert "mm-walk" in catalog
+    entry = catalog["mm-walk"]
+    assert entry["enabled"] is True
+    assert entry["kind"] == "module"
+    assert entry["category"] == "memory"
+    assert entry["origin"] == "qos-native"
+    assert entry["build_mode"] == "kbuild-module"
+    assert entry["source"] == "linux-lab/experiments/mm/mm_walk"
+    assert "mm-walk" in entry.get("groups", [])
+
+
+def test_mm_walk_group_is_registered_in_example_planner() -> None:
+    module = _load_module("linux_lab_examples_mm_walk_reg", EXAMPLES_MODULE_PATH)
+    assert "mm-walk" in module.EXAMPLE_GROUP_ORDER
+    assert module.GROUP_KIND_MAP.get("mm-walk") == "module"
+    assert "mm-walk" in module.GROUP_ENTRY_PRIORITY
