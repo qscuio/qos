@@ -1,5 +1,4 @@
 #include <stddef.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "../init_state.h"
@@ -235,9 +234,12 @@ int qos_vmm_map_as(uint32_t asid, uint64_t va, uint64_t pa, uint32_t flags) {
     g_pas[asid][(uint32_t)idx] = pa;
     g_vflags[asid][(uint32_t)idx] = flags;
 #ifdef QOS_MM_DEBUG
-    printf("[mm_debug] vmm_map_as: asid=%u VA=0x%lx -> PA=0x%lx PFN=0x%lx flags=0x%x\n",
-           asid, (unsigned long)va, (unsigned long)pa,
-           (unsigned long)(pa >> 12), flags);
+    {
+        extern int qos_printf(const char *fmt, ...);
+        qos_printf("[mm_debug] vmm_map_as: asid=%u VA=0x%lx -> PA=0x%lx PFN=0x%lx flags=0x%x\n",
+                   asid, (unsigned long)va, (unsigned long)pa,
+                   (unsigned long)(pa >> 12), flags);
+    }
 #endif
     return 0;
 }

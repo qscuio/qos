@@ -13,6 +13,7 @@ supported_profiles:
   - "debug-tools"
   - "mm-experiments"
   - "minimal"
+  - "fuzzing"
 required_profiles: []
 default_compat: false
 source_url: "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.10.tar.xz"

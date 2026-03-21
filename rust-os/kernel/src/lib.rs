@@ -1,13 +1,29 @@
 #![no_std]
 
-#[cfg(test)]
-extern crate std;
-
 use core::cell::UnsafeCell;
 use core::ffi::CStr;
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use qos_boot::boot_info::{BootInfo, QOS_BOOT_MAGIC, QOS_MMAP_MAX_ENTRIES};
+
+// Host-side std for mm-debug test builds (cargo test --features mm-debug).
+#[cfg(all(feature = "mm-debug", test))]
+extern crate std;
+
+// Bare-metal debug output via PL011 UART at QEMU virt base (0x09000000).
+#[cfg(all(feature = "mm-debug", not(test)))]
+struct UartWriter;
+
+#[cfg(all(feature = "mm-debug", not(test)))]
+impl core::fmt::Write for UartWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        const PL011_DR: *mut u32 = 0x0900_0000 as *mut u32;
+        for b in s.bytes() {
+            unsafe { PL011_DR.write_volatile(b as u32) };
+        }
+        Ok(())
+    }
+}
 
 pub const QOS_INIT_MM: u32 = 1 << 0;
 pub const QOS_INIT_DRIVERS: u32 = 1 << 1;
@@ -1629,6 +1645,15 @@ pub fn vmm_map_as(asid: u32, va: u64, pa: u64, flags: u32) -> Result<(), KernelE
 
         state.pas[idx] = pa;
         state.flags[idx] = flags;
+        #[cfg(all(feature = "mm-debug", not(test)))]
+        {
+            use core::fmt::Write;
+            let _ = write!(
+                UartWriter,
+                "[mm_debug] vmm_map_as: asid={} VA={:#x} -> PA={:#x} PFN={:#x} flags={:#x}\n",
+                asid, va, pa, pa >> 12, flags
+            );
+        }
         #[cfg(all(feature = "mm-debug", test))]
         std::eprintln!(
             "[mm_debug] vmm_map_as: asid={} VA={:#x} -> PA={:#x} PFN={:#x} flags={:#x}",

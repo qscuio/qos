@@ -1,0 +1,14 @@
+key: "fuzzing"
+kind: "concrete"
+precedence: 10
+replaces: []
+expands_to: []
+fragment_ref: "linux-lab/fragments/fuzzing.conf"
+compatible_kernels:
+  - "*"
+compatible_arches:
+  - "*"
+host_tools: []
+tool_groups: []
+example_groups: []
+post_build_refs: []

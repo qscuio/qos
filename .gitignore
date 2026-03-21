@@ -21,6 +21,10 @@ build/linux1/
 build/linux-lab/
 third_party/linux1/
 
+# syzkaller generated SSH keys — never commit private keys
+syzkaller/ssh/
+build/syzkaller/
+
 # linux1 source-tree generated build byproducts
 linux-1.0.0/.config
 linux-1.0.0/.depend
