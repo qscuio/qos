@@ -1,3 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0
 obj-$(CONFIG_SAMPLE_RUST_HELLO)		+= hello_rust.o
 obj-$(CONFIG_SAMPLE_RUST_CHARDEV)	+= rust_chardev.o
+obj-$(CONFIG_SAMPLE_RUST_SYNC)		+= rust_sync.o
+obj-$(CONFIG_SAMPLE_RUST_WORKQUEUE)	+= rust_workqueue.o
+obj-$(CONFIG_SAMPLE_RUST_PROCFS)	+= rust_procfs.o
+obj-$(CONFIG_SAMPLE_RUST_LEARN_PLATFORM)	+= rust_platform.o
+obj-$(CONFIG_SAMPLE_RUST_SLAB)		+= rust_slab.o
+obj-$(CONFIG_SAMPLE_RUST_NETDEV)	+= rust_netdev.o

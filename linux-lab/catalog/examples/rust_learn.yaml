@@ -7,8 +7,10 @@ build_mode: rust-user
 tags:
 - rust
 - kernel
+- teaching
+- samples
 groups:
 - rust-core
 - rust-all
 enabled: true
-notes: Imported Rust learning module and user helper pair.
+notes: Expanded Rust learning suite with advanced sync, procfs, platform, slab, and netdev samples plus helper binaries/scripts.

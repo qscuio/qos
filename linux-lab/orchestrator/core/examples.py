@@ -218,6 +218,45 @@ def _rust_plan(
     commands: list[list[str]] = []
     kernel_sample_sources: list[str] = []
     paths: list[str] = []
+    guest_module_dir = "/home/qwert/build/samples/rust"
+    guest_helper_dir = "/home/qwert/linux-lab/examples/rust/rust_learn/user"
+    guest_script_dir = "/home/qwert/linux-lab/examples/rust/rust_learn/scripts"
+    guest_smoke_commands: list[str] = []
+
+    smoke_registry = {
+        "hello_rust.rs": [
+            f"sudo insmod {guest_module_dir}/hello_rust.ko greeting_count=5",
+            f"{guest_helper_dir}/test_hello",
+        ],
+        "rust_chardev.rs": [
+            f"sudo insmod {guest_module_dir}/rust_chardev.ko",
+            f"{guest_helper_dir}/test_chardev",
+        ],
+        "rust_sync.rs": [
+            f"sudo insmod {guest_module_dir}/rust_sync.ko",
+            f"{guest_helper_dir}/test_sync",
+        ],
+        "rust_workqueue.rs": [
+            f"sudo insmod {guest_module_dir}/rust_workqueue.ko",
+            f"{guest_helper_dir}/test_workqueue",
+        ],
+        "rust_procfs.rs": [
+            f"sudo insmod {guest_module_dir}/rust_procfs.ko",
+            f"{guest_script_dir}/test_rust_procfs.sh",
+        ],
+        "rust_platform.rs": [
+            f"sudo insmod {guest_module_dir}/rust_platform.ko",
+            f"{guest_script_dir}/test_rust_platform.sh",
+        ],
+        "rust_slab.rs": [
+            f"sudo insmod {guest_module_dir}/rust_slab.ko",
+            f"{guest_script_dir}/test_rust_slab.sh",
+        ],
+        "rust_netdev.rs": [
+            f"sudo insmod {guest_module_dir}/rust_netdev.ko",
+            f"{guest_script_dir}/test_rust_netdev.sh",
+        ],
+    }
     for entry, rust_dir in zip(entries, rust_dirs, strict=True):
         paths.append(str(rust_dir))
         user_dir = rust_dir / "user"
@@ -234,13 +273,21 @@ def _rust_plan(
                 kernel_version=kernel_version,
             )
         )
-        kernel_sample_sources.extend(str(path) for path in sorted(rust_dir.glob("*.rs")))
+        for path in sorted(rust_dir.glob("*.rs")):
+            kernel_sample_sources.append(str(path))
+            for command in smoke_registry.get(path.name, []):
+                if command not in guest_smoke_commands:
+                    guest_smoke_commands.append(command)
     return {
         "group": group,
         "entries": entries,
         "paths": paths,
         "commands": commands,
         "kernel_sample_sources": kernel_sample_sources,
+        "guest_module_dir": guest_module_dir,
+        "guest_helper_dir": guest_helper_dir,
+        "guest_script_dir": guest_script_dir,
+        "guest_smoke_commands": guest_smoke_commands,
     }
 
 

@@ -21,3 +21,75 @@ config SAMPLE_RUST_CHARDEV
 	  the module will be called rust_chardev.
 
 	  If unsure, say N.
+
+config SAMPLE_RUST_SYNC
+	tristate "Rust sync learning module"
+	depends on RUST
+	help
+	  A misc-device sample that teaches shared state, blocking consumers,
+	  ring buffers, and sync primitive trade-offs in Rust.
+
+	  To compile this as a module, choose M here:
+	  the module will be called rust_sync.
+
+	  If unsure, say N.
+
+config SAMPLE_RUST_WORKQUEUE
+	tristate "Rust workqueue learning module"
+	depends on RUST
+	help
+	  A misc-device sample that queues deferred work and exposes completion
+	  counters through a small ioctl interface.
+
+	  To compile this as a module, choose M here:
+	  the module will be called rust_workqueue.
+
+	  If unsure, say N.
+
+config SAMPLE_RUST_PROCFS
+	tristate "Rust procfs learning module"
+	depends on RUST
+	help
+	  A procfs-focused sample that demonstrates seq_file iteration, config
+	  parsing, and carefully wrapped FFI boundaries from Rust.
+
+	  To compile this as a module, choose M here:
+	  the module will be called rust_procfs.
+
+	  If unsure, say N.
+
+config SAMPLE_RUST_LEARN_PLATFORM
+	tristate "Rust platform driver learning module"
+	depends on RUST
+	help
+	  A platform-driver sample with simulated registers and misc-device
+	  userspace access for probe/remove lifecycle study.
+
+	  To compile this as a module, choose M here:
+	  the module will be called rust_platform.
+
+	  If unsure, say N.
+
+config SAMPLE_RUST_SLAB
+	tristate "Rust slab cache learning module"
+	depends on RUST
+	help
+	  A slab-allocator sample that demonstrates handle tables, generation
+	  counters, and allocator lifecycle cleanup from Rust.
+
+	  To compile this as a module, choose M here:
+	  the module will be called rust_slab.
+
+	  If unsure, say N.
+
+config SAMPLE_RUST_NETDEV
+	tristate "Rust virtual netdev learning module"
+	depends on RUST
+	help
+	  A virtual network-device sample that documents the registration,
+	  TX/RX, statistics, and carrier-control lifecycle from Rust.
+
+	  To compile this as a module, choose M here:
+	  the module will be called rust_netdev.
+
+	  If unsure, say N.

@@ -7,7 +7,7 @@
 //   insmod /home/qwert/build/samples/rust/rust_chardev.ko
 //
 //   # Then run this test:
-//   /home/qwert/modules/rust_learn/user/test_chardev
+//   /home/qwert/linux-lab/examples/rust/rust_learn/user/test_chardev
 //
 //   # Check kernel logs:
 //   dmesg | tail

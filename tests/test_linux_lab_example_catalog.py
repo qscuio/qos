@@ -57,6 +57,36 @@ def test_catalog_loader_exposes_required_fields_and_enabled_curated_subset() -> 
         assert catalog[key]["enabled"] is True
 
 
+def test_userspace_qulk_bulk_entry_exists_and_uses_custom_make() -> None:
+    module = _load_module("linux_lab_example_catalog_userspace_bulk", MODULE_PATH)
+    catalog = module.load_example_catalog(CATALOG_ROOT)
+
+    entry = catalog["userspace-qulk-bulk"]
+    assert entry["kind"] == "userspace"
+    assert entry["category"] == "io"
+    assert entry["source"] == "linux-lab/examples/userspace/qulk"
+    assert entry["build_mode"] == "custom-make"
+    assert entry["enabled"] is True
+    assert entry["groups"] == ["userspace-core", "userspace-all"]
+    assert entry["build_commands"] == [["make", "-C", "{entry_root}", "-j4"]]
+
+
+def test_rust_learn_catalog_entry_remains_curated_and_rust_scoped() -> None:
+    module = _load_module("linux_lab_example_catalog_rust_learn", MODULE_PATH)
+    catalog = module.load_example_catalog(CATALOG_ROOT)
+
+    entry = catalog["rust_learn"]
+    assert entry["kind"] == "rust"
+    assert entry["category"] == "core"
+    assert entry["build_mode"] == "rust-user"
+    assert entry["source"] == "linux-lab/examples/rust/rust_learn"
+    assert "rust" in entry.get("tags", [])
+    assert "kernel" in entry.get("tags", [])
+    assert "teaching" in entry.get("tags", [])
+    assert "rust-core" in entry.get("groups", [])
+    assert "rust-all" in entry.get("groups", [])
+
+
 def test_catalog_loader_rejects_duplicate_keys(tmp_path: Path) -> None:
     module = _load_module("linux_lab_example_catalog_dupe", MODULE_PATH)
     root = tmp_path / "catalog"
@@ -118,6 +148,7 @@ def test_custom_make_entries_are_explicitly_wired_and_enabled() -> None:
         "linux_kernel_hacking",
         "mm-uffd",
         "sBPF",
+        "userspace-qulk-bulk",
         "xdp_ipv6_filter",
     ]
     for key, commands in custom_entries:
@@ -220,6 +251,45 @@ def test_example_planner_respects_catalog_group_membership(tmp_path: Path) -> No
 
     assert [entry["key"] for entry in core_plan[0]["entries"]] == ["simple"]
     assert [entry["key"] for entry in full_plan[0]["entries"]] == ["simple", "hello"]
+
+
+def test_example_planner_keeps_custom_make_userspace_commands(tmp_path: Path) -> None:
+    labroot = tmp_path / "labroot"
+    catalog_root = labroot / "catalog" / "examples"
+    source_root = labroot / "examples" / "userspace" / "qulk"
+    catalog_root.mkdir(parents=True)
+    source_root.mkdir(parents=True)
+
+    (catalog_root / "userspace-qulk-bulk.yaml").write_text(
+        "\n".join(
+            [
+                'key: "userspace-qulk-bulk"',
+                'kind: "userspace"',
+                'category: "io"',
+                'source: "linux-lab/examples/userspace/qulk"',
+                'origin: "../qulk/userspace/app"',
+                'build_mode: "custom-make"',
+                "groups:",
+                '  - "userspace-core"',
+                '  - "userspace-all"',
+                "build_commands:",
+                '  - ["make", "-C", "{entry_root}", "-j4"]',
+                "enabled: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    module = _load_module("linux_lab_examples_userspace_custom", EXAMPLES_MODULE_PATH)
+    plan = module.resolve_example_plan(
+        example_groups=["userspace-core"],
+        linux_lab_root=labroot,
+        build_root=tmp_path / "build",
+    )
+
+    assert [entry["key"] for entry in plan[0]["entries"]] == ["userspace-qulk-bulk"]
+    assert plan[0]["commands"] == [["make", "-C", str(source_root), "-j4"]]
 
 
 def test_mm_experiments_catalog_entries_are_valid_and_enabled() -> None:

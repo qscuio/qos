@@ -50,10 +50,34 @@ def test_curated_examples_are_ported() -> None:
         ROOT / "linux-lab" / "examples" / "userspace" / "app" / "poll.c",
         ROOT / "linux-lab" / "examples" / "bpf" / "learn" / "xdp.c",
         ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "hello_rust.rs",
+        ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "rust_sync.rs",
+        ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "rust_workqueue.rs",
+        ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "rust_procfs.rs",
+        ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "rust_platform.rs",
+        ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "rust_slab.rs",
+        ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "rust_netdev.rs",
+        ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "scripts" / "test_rust_sync.sh",
+        ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "scripts" / "test_rust_procfs.sh",
+        ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "scripts" / "test_rust_platform.sh",
+        ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "scripts" / "test_rust_slab.sh",
+        ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "scripts" / "test_rust_netdev.sh",
         ROOT / "linux-lab" / "examples" / "rust" / "rust_learn" / "user" / "test_hello.rs",
     ]
     missing = [str(path) for path in expected if not path.is_file()]
     assert missing == [], f"missing curated examples: {missing}"
+
+
+def test_userspace_qulk_bulk_tree_is_ported() -> None:
+    root = ROOT / "linux-lab" / "examples" / "userspace" / "qulk"
+    expected = [
+        root / "Makefile",
+        root / "README.md",
+        root / "app",
+        root / "lib",
+        root / "vendor",
+    ]
+    missing = [str(path) for path in expected if not path.exists()]
+    assert missing == [], f"missing userspace qulk bulk tree entries: {missing}"
 
 
 def test_curated_examples_are_enabled_in_catalog() -> None:
@@ -79,13 +103,40 @@ def test_example_helper_resolves_build_commands() -> None:
     groups = [item["group"] for item in plan]
     assert groups == ["modules-core", "userspace-core", "rust-core", "bpf-core"]
     assert [entry["key"] for entry in plan[0]["entries"]] == ["modules-debug", "simple", "ioctl"]
-    assert [entry["key"] for entry in plan[1]["entries"]] == ["userspace-app"]
+    assert [entry["key"] for entry in plan[1]["entries"]] == ["userspace-app", "userspace-qulk-bulk"]
     assert [entry["key"] for entry in plan[2]["entries"]] == ["rust_learn"]
     assert [entry["key"] for entry in plan[3]["entries"]] == ["bpf-learn"]
     assert plan[0]["commands"][0][0:2] == ["make", "-C"]
     assert plan[1]["commands"][0][0] == "gcc"
+    assert any(command[0:2] == ["make", "-C"] for command in plan[1]["commands"])
     assert plan[2]["commands"][0][0:2] == ["make", "-C"]
     assert plan[3]["commands"][0][0] == "clang"
+    rust_sources = sorted(Path(path).name for path in plan[2]["kernel_sample_sources"])
+    assert rust_sources == [
+        "hello_rust.rs",
+        "rust_chardev.rs",
+        "rust_netdev.rs",
+        "rust_platform.rs",
+        "rust_procfs.rs",
+        "rust_slab.rs",
+        "rust_sync.rs",
+        "rust_workqueue.rs",
+    ]
+
+
+def test_rust_profile_fragment_enables_advanced_kernel_modules() -> None:
+    rust_fragment = ROOT / "linux-lab" / "fragments" / "rust.conf"
+    text = rust_fragment.read_text(encoding="utf-8")
+    expected = [
+        "CONFIG_SAMPLE_RUST_SYNC=m",
+        "CONFIG_SAMPLE_RUST_WORKQUEUE=m",
+        "CONFIG_SAMPLE_RUST_PROCFS=m",
+        "CONFIG_SAMPLE_RUST_LEARN_PLATFORM=m",
+        "CONFIG_SAMPLE_RUST_SLAB=m",
+        "CONFIG_SAMPLE_RUST_NETDEV=m",
+    ]
+    missing = [line for line in expected if line not in text]
+    assert missing == [], f"missing rust fragment enables: {missing}"
 
 
 def test_run_dry_run_emits_example_metadata() -> None:

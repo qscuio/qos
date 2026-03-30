@@ -13,7 +13,7 @@
 //   insmod /home/qwert/build/samples/rust/hello_rust.ko greeting_count=5
 //
 //   # Then run this test:
-//   /home/qwert/modules/rust_learn/user/test_hello
+//   /home/qwert/linux-lab/examples/rust/rust_learn/user/test_hello
 
 use std::fs;
 use std::io::{self, BufRead, BufReader};

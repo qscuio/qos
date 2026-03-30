@@ -558,6 +558,7 @@ def test_build_examples_stage_executes_local_example_plan(tmp_path: Path, monkey
     (rust_user / "Makefile").write_text("all:\n\tpwd > rust-user.ok\n", encoding="utf-8")
     (rust_root / "hello_rust.rs").write_text("// rust sample\n", encoding="utf-8")
     (rust_root / "rust_chardev.rs").write_text("// rust chardev\n", encoding="utf-8")
+    (rust_root / "rust_netdev.rs").write_text("// rust netdev\n", encoding="utf-8")
     for filename in ("hello.c", "packet_filter.c", "tracing.c", "xdp.c", "open.c"):
         (bpf_dir / filename).write_text("int prog(void) { return 0; }\n", encoding="utf-8")
     _write_example_catalog_entry(
@@ -636,6 +637,12 @@ def test_build_examples_stage_executes_local_example_plan(tmp_path: Path, monkey
     assert (rust_user / "rust-user.ok").read_text(encoding="utf-8").strip() == str(rust_user)
     for obj in ("hello.o", "packet_filter.o", "tracing.o", "xdp.o", "open.o"):
         assert (bpf_dir / obj).is_file()
+    rust_plan = next(plan for plan in result["metadata"]["example_plans"] if plan["group"] == "rust-core")
+    assert rust_plan["guest_module_dir"] == "/home/qwert/build/samples/rust"
+    assert rust_plan["guest_helper_dir"] == "/home/qwert/linux-lab/examples/rust/rust_learn/user"
+    assert rust_plan["guest_script_dir"] == "/home/qwert/linux-lab/examples/rust/rust_learn/scripts"
+    assert rust_plan["guest_smoke_commands"][0] == "sudo insmod /home/qwert/build/samples/rust/hello_rust.ko greeting_count=5"
+    assert rust_plan["guest_smoke_commands"][-1] == "/home/qwert/linux-lab/examples/rust/rust_learn/scripts/test_rust_netdev.sh"
 
 
 def test_build_examples_stage_executes_catalog_custom_build_commands(tmp_path: Path, monkeypatch) -> None:
@@ -691,3 +698,71 @@ def test_build_examples_stage_executes_catalog_custom_build_commands(tmp_path: P
             "x86_64-linux-gnu-",
         ]
     )
+
+
+def test_build_kernel_stage_stages_rust_samples_into_kernel_workspace(tmp_path: Path, monkeypatch) -> None:
+    build_kernel_mod = _load_module("linux_lab_build_kernel_rust_stage_live", ROOT / "linux-lab" / "orchestrator" / "stages" / "build_kernel.py")
+    state_mod = _load_module("linux_lab_state_build_kernel_rust_stage_live", STATE_MODULE)
+
+    labroot = tmp_path / "labroot"
+    rust_root = labroot / "examples" / "rust" / "rust_learn"
+    rust_user = rust_root / "user"
+    rust_root.mkdir(parents=True, exist_ok=True)
+    rust_user.mkdir(parents=True, exist_ok=True)
+    (rust_root / "hello_rust.rs").write_text("// hello\n", encoding="utf-8")
+    (rust_root / "rust_sync.rs").write_text("// sync\n", encoding="utf-8")
+    (rust_root / "Kconfig").write_text(
+        "config SAMPLE_RUST_HELLO\n\ttristate \"Hello\"\n\nconfig SAMPLE_RUST_SYNC\n\ttristate \"Sync\"\n",
+        encoding="utf-8",
+    )
+    (rust_root / "Makefile").write_text(
+        "obj-$(CONFIG_SAMPLE_RUST_HELLO)\t+= hello_rust.o\nobj-$(CONFIG_SAMPLE_RUST_SYNC)\t+= rust_sync.o\n",
+        encoding="utf-8",
+    )
+    (labroot / "catalog" / "examples").mkdir(parents=True, exist_ok=True)
+    _write_example_catalog_entry(
+        labroot,
+        "rust_learn",
+        "rust",
+        "core",
+        "linux-lab/examples/rust/rust_learn",
+        "rust-user",
+    )
+
+    request = _make_request(tmp_path)
+    request.profiles = ["rust"]
+    request_root = Path(request.artifact_root)
+    state_mod.ensure_request_dirs(request_root)
+
+    kernel_tree = request_root / "workspace" / "kernel" / "linux-fixture"
+    samples_rust = kernel_tree / "samples" / "rust"
+    samples_rust.mkdir(parents=True, exist_ok=True)
+    (samples_rust / "Kconfig").write_text("menu \"Rust samples\"\n", encoding="utf-8")
+    (samples_rust / "Makefile").write_text("obj-$(CONFIG_SAMPLE_RUST_MINIMAL) += rust_minimal.o\n", encoding="utf-8")
+    (request_root / "workspace" / "build").mkdir(parents=True, exist_ok=True)
+
+    fakebin = tmp_path / "fakebin"
+    _write_fake_make(fakebin / "make")
+    marker_path = request_root / "workspace" / "kernel-build.marker"
+    monkeypatch.setenv("LINUX_LAB_FAKE_MAKE_MARKER", str(marker_path))
+    monkeypatch.setenv("PATH", f"{fakebin}:{os.environ['PATH']}")
+    monkeypatch.setenv("LINUX_LAB_ROOT_OVERRIDE", str(labroot))
+
+    manifests = SimpleNamespace(
+        kernels={"fixture": SimpleNamespace(config_family="modern")},
+        arches={"x86_64": SimpleNamespace(toolchain_prefix="", kernel_image_name="bzImage")},
+        profiles={"rust": SimpleNamespace(example_groups=["rust-core"], tool_groups=[])},
+    )
+
+    result = build_kernel_mod.STAGE.executor(request, manifests, request_root)
+
+    assert result["status"] == "succeeded"
+    assert (samples_rust / "hello_rust.rs").read_text(encoding="utf-8") == "// hello\n"
+    assert (samples_rust / "rust_sync.rs").read_text(encoding="utf-8") == "// sync\n"
+    kconfig_text = (samples_rust / "Kconfig").read_text(encoding="utf-8")
+    makefile_text = (samples_rust / "Makefile").read_text(encoding="utf-8")
+    assert "config SAMPLE_RUST_SYNC" in kconfig_text
+    assert "obj-$(CONFIG_SAMPLE_RUST_SYNC)" in makefile_text
+    assert result["metadata"]["staged_rust_samples"] == ["hello_rust.rs", "rust_sync.rs"]
+    assert result["metadata"]["rust_kconfig_path"] == str(samples_rust / "Kconfig")
+    assert result["metadata"]["rust_makefile_path"] == str(samples_rust / "Makefile")
