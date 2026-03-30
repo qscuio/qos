@@ -1,0 +1,134 @@
+libccli(3)
+==========
+
+NAME
+----
+ccli_printf, ccli_vprintf, ccli_page, ccli_getchar - Commands for I/O to the ccli descriptor.
+
+SYNOPSIS
+--------
+[verse]
+--
+*#include <ccli.h>*
+
+int *ccli_printf*(struct ccli pass:[*]_ccli_, const char pass:[*]_fmt_, ...);
+int *ccli_vprintf*(struct ccli pass:[*]_ccli_, const char pass:[*]_fmt_, va_list _ap_);
+
+int *ccli_page*(struct ccli pass:[*]_ccli_, int _line_, const char pass:[*]_fmt_, ...);
+
+int *ccli_getchar*(struct ccli pass:[*]_ccli_);
+--
+
+DESCRIPTION
+-----------
+libccli is a simple API to create a CLI interface with the user.
+After a descriptor is created from *ccli_alloc(3)* and a command is registered
+with *ccli_register_command(3)* or one of the similar functions, these are
+the functions that can be useful in the callback.
+
+If a callback needs to write to the output file descriptor passed in as _out_ to
+*ccli_alloc()*, it can use *ccli_printf()*. It has the same format as normal
+*printf(3)* but the first parameter is the _ccfi_ descriptor passed to *ccli_alloc()*.
+
+The *ccli_vprintf()* acts the same as *ccli_printf()* but takes a va_list instead.
+This is similar to the way *vprintf*(3) works.
+
+If a lot needs to be displayed, the use of *ccli_page()* can be used. This works the
+same as *ccli_printf()* but takes a _line_ argument. This should be initized as 1
+and set to the return value of the *ccli_page()* call. When the print is about to
+extend the size of the screen, a prompt will be displayed to ask the user if they
+want another screen full, to quit, or to just continue and print everything without
+stopping again to be prompted. Normally, the return of *ccli_page()* will be
+_line_ + 1. But if the prompt happens, and the user hits 'q', then -1 will be
+returned, and the application should honor this request and not print any more.
+If the user hits 'c' to continue without prompting, then zero (0) is returned, and
+when _line_ is zero that is passed into *ccli_page()* then no prompt will be displayed.
+
+There may be case to need to read from the input defined by *ccli_alloc*(3).
+For example, to implement a pager for output may want a character
+from the user to continue.
+
+RETURN VALUE
+------------
+*ccli_printf()* returns the number of characters written or -1 on error.
+*ccli_vprintf()* returns the number of characters written or -1 on error.
+
+*ccli_page()* returns _line_ + 1 to continue normally, 0 if the user does not
+want to prompt again, and -1 on error or the user hit 'q' at the prompt to quit.
+If the user hit 'q' then ERRNO will not be set.
+
+*ccli_getchar()* returns the character that was inputed. It will not
+return non printable characters and white space. It will return
+0 on Ctrl^C, and -1 on EOF or error. If there's an error then
+errno will be set.
+
+ERRORS
+------
+The following errors are for all the above calls:
+
+*ENOMEM* Memory allocation error.
+
+*EINVAL* One of the input parameters was invalid.
+
+EXAMPLE
+-------
+See *ccli_line_parse*(3) for an example.
+
+FILES
+-----
+[verse]
+--
+*ccli.h*
+	Header file to include in order to have access to the library APIs.
+*-ccli*
+	Linker switch to add when building a program that uses the library.
+--
+
+SEE ALSO
+--------
+*libccli*(3),
+*ccli_alloc*(3),
+*ccli_free*(3),
+*ccli_in*(3),
+*ccli_out*(3),
+*ccli_register_command*(3),
+*ccli_register_completion*(3),
+*ccli_register_default*(3),
+*ccli_register_unknown*(3),
+*ccli_loop*(3),
+*ccli_line_parse*(3),
+*ccli_line_clear*(3),
+*ccli_line_inject*(3),
+*ccli_line_refresh*(3),
+*ccli_argv_free*(3),
+*ccli_history*(3),
+*ccli_history_load*(3),
+*ccli_history_save*(3),
+*ccli_history_load_file*(3),
+*ccli_history_save_file*(3),
+*ccli_history_load_fd*(3),
+*ccli_history_save_fd*(3)
+*ccli_execute*(3)
+
+AUTHOR
+------
+[verse]
+--
+*Steven Rostedt* <rostedt@goodmis.org>
+--
+REPORTING BUGS
+--------------
+Report bugs to  <rostedt@goodmis.org>
+
+LICENSE
+-------
+libccli is Free Software licensed under the GNU LGPL 2.1
+
+RESOURCES
+---------
+https://github.com/rostedt/libccli
+
+COPYING
+-------
+Copyright \(C) 2022 Steven Rostedt. Free use of this software is granted under
+the terms of the GNU Public License (GPL).

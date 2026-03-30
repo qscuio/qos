@@ -1,0 +1,95 @@
+{
+	"clove_version" : "2.2.4",
+	"api_version" : 1,
+	"result" : {
+		"suite_count" : 2,
+		"test_count" : 14,
+		"suites" : {
+			"MySuite02" : {
+				"_data" : {
+					"file" : "clove.c"
+				},
+				"A_FirstTest" : {
+					"status" : 1,
+					"duration" : 372
+				},
+				"B_SecondTest" : {
+					"status" : 1,
+					"duration" : 118
+				}
+			},
+			"MySuite03" : {
+				"_data" : {
+					"file" : "clove.c"
+				},
+				"A_2_FirstTest" : {
+					"status" : 2,
+					"duration" : 115,
+					"line" : 62,
+					"assert" : 1,
+					"type" : 3,
+					"expected" : "1",
+					"actual" : "2"
+				},
+				"B_2_SecondTest" : {
+					"status" : 2,
+					"duration" : 197,
+					"line" : 69,
+					"assert" : 1,
+					"type" : 3,
+					"expected" : "1",
+					"actual" : "2"
+				},
+				"BooleanTest" : {
+					"status" : 1,
+					"duration" : 236
+				},
+				"CharTest" : {
+					"status" : 1,
+					"duration" : 164
+				},
+				"DoubleTest" : {
+					"status" : 1,
+					"duration" : 190
+				},
+				"FailTest" : {
+					"status" : 2,
+					"duration" : 89,
+					"line" : 131,
+					"assert" : 3,
+					"type" : 0,
+					"expected" : "",
+					"actual" : ""
+				},
+				"FloatTest" : {
+					"status" : 1,
+					"duration" : 169
+				},
+				"IntTest" : {
+					"status" : 1,
+					"duration" : 76
+				},
+				"LongfamilyTest" : {
+					"status" : 1,
+					"duration" : 148
+				},
+				"PassTest" : {
+					"status" : 1,
+					"duration" : 81
+				},
+				"StringTest" : {
+					"status" : 1,
+					"duration" : 196
+				},
+				"UIntTest" : {
+					"status" : 1,
+					"duration" : 86
+				}
+			}
+		},
+		"test_passed" : 11,
+		"test_skipped" : 0,
+		"test_failed" : 3,
+		"status" : 2
+	}
+}

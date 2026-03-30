@@ -1,0 +1,13 @@
+key: userspace-qulk-bulk
+kind: userspace
+category: io
+source: linux-lab/examples/userspace/qulk
+origin: ../qulk/userspace/app
+build_mode: custom-make
+groups:
+  - userspace-core
+  - userspace-all
+build_commands:
+  - ["make", "-C", "{entry_root}", "-j4"]
+enabled: true
+notes: Bulk-imported userspace app corpus and dependency closure from qulk.

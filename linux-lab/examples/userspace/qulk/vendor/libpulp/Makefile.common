@@ -1,0 +1,75 @@
+#   libpulp - User-space Livepatching Library
+#
+#   Copyright (C) 2020-2021 SUSE Software Solutions GmbH
+#
+#   This file is part of libpulp.
+#
+#   libpulp is free software; you can redistribute it and/or
+#   modify it under the terms of the GNU Lesser General Public
+#   License as published by the Free Software Foundation; either
+#   version 2.1 of the License, or (at your option) any later version.
+#
+#   libpulp is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+#   Lesser General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with libpulp.  If not, see <http://www.gnu.org/licenses/>.
+
+# ULP tools location.
+ULP = $(top_builddir)/tools/ulp
+ULP_POST = $(ULP) post
+ULP_PACKER = $(ULP) packer
+ULP_REVERSE = $(ULP) reverse
+ULP_EXTRACT = $(ULP) extract
+
+# Build and link requirements for live-patchable (target) libraries.
+TARGET_CFLAGS = \
+  -fPIC \
+  -fpatchable-function-entry=$(ULP_NOPS_LEN),$(PRE_NOPS_LEN) \
+  -fno-inline \
+  $(AM_CFLAGS)
+TARGET_LDFLAGS = \
+  --build-id \
+  -Wl,--hash-style=sysv \ # Ubuntu seems to default to gnu, so be clear we ...
+  $(AM_LDFLAGS) # ... want old style hash sections, else DT_HASH is empty.
+
+# In libtool, convenience libraries are not installed, so they do not
+# need -rpath, which causes them to be statically linked.  However,
+# libpulp can only live patch dynamically linked libraries, so pass
+# -rpath to libtool, which causes the linking to become dynamic.
+CONVENIENCE_LDFLAGS = -rpath $(libdir) $(AM_LDFLAGS)
+
+# The following custom rules are triggered by <testname>_DEPENDENCIES:
+
+# This rule causes the target library to be post-processed with
+# ulp_post, which replaces single-byte with multi-byte nops. Files with
+# .post extension track whether the respective libraries have already
+# been post-processed.
+#
+# Since we also support to specify the target library as a dump of the
+# relevant informations (name, symbols, build id), we also have extra
+# logic to generate such dumps (JSON file).
+.libs/lib%.post: lib%.la
+	$(ULP_POST) .libs/lib$*.so.0
+	$(ULP_EXTRACT) .libs/lib$*.so.0 -o .libs/lib$*.so.0.json
+	touch $@
+
+# These rules cause the livepatch metadata to be built. The .ulp and
+# .dsc targets depends on check_LTLIBRARIES, because .la targets
+# indirectly produce the .so files they need (it is impossible to have
+# .ulp and .dsc targets depend directly on .so files, because libtool
+# does not create .so targets).
+%.dsc: %.in $(check_LTLIBRARIES)
+	sed -e "s|__ABS_BUILDDIR__|$(abs_builddir)|" $< > $*.tmp
+	$(top_srcdir)/tests/offsets.py $*.tmp $@
+	rm -f $*.tmp
+
+# This rule build the .ulp file, which at some point were used to hold
+# the compiled metadata description. Today it is directly integrated
+# into the .so file which holds the livepatch code, within the .ulp
+# and .ulp.rev section.
+%.ulp: %.dsc $(check_LTLIBRARIES)
+	$(ULP_PACKER) $< #-o $@
+	echo Maintained here for legacy reasons > $@

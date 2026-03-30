@@ -1,0 +1,10 @@
+name = "rc"
+type = "task"
+after = ["sysctl"]
+wait = true
+standard_out_path = "/dev/console"
+standard_error_path = "/dev/console"
+
+[methods]
+start = "/usr/bin/sed 's,rcorder,/lib/jobd/libexec/rcorder,g' < /etc/rc | /bin/sh /dev/stdin autoboot"
+stop = "/usr/bin/sed 's,rcorder,/lib/jobd/libexec/rcorder,g' < /etc/rc.shutdown | /bin/sh /dev/stdin autoboot"

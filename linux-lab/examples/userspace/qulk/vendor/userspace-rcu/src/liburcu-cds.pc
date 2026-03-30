@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2023 EfficiOS Inc.
+#
+# SPDX-License-Identifier: MIT
+
+prefix=/usr/local
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: Userspace RCU Concurrent Data Structures
+Description: Data structures leveraging RCU and atomic operations to provide efficient concurrency-aware storage
+Version: 0.15.0-pre
+Requires:
+Libs: -L${libdir} -lurcu-common -lurcu-cds
+Cflags: -I${includedir} 

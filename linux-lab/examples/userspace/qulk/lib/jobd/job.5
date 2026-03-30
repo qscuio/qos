@@ -1,0 +1,87 @@
+.\"
+.\" Copyright (c) 2018 Mark Heily <mark@heily.com>
+.\"
+.\" Permission to use, copy, modify, and distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.Dd August 5, 2018
+.Dt JOB 8
+.Os
+.Sh NAME
+.Nm job
+.Nd job configuration file
+.\" .Sh SYNOPSIS
+.\" .Nm ???what to put here???
+.Sh DESCRIPTION
+The 
+.Nm
+configuration file format is a TOML document with the following
+top-level fields:
+.Bl -column "EnvironmentVariables" "dictionary" "Description"
+.It Sy Name Ta Sy Type Ta Sy Description
+.It after Ta array Ta "Jobs that this job must run after."
+.It before Ta array Ta "Jobs that this job must run before."
+.It command Ta string Ta "The command to be executed."
+.It description Ta string Ta "A multi-line description."
+.It environment Ta dictionary Ta "Environment variables"
+.It group Ta string Ta "The group name for setgid(2)"
+.It init_groups Ta boolean Ta "Whether to call initgroups(3)"
+.It keep_alive Ta boolean Ta "Restart the job if it dies"
+.It name Ta string Ta "The short name of the job"
+.It root_directory Ta string Ta "The directory to chroot(2) into"
+.It standard_error_path Ta string Ta "The path to redirect STDERR into"
+.It standard_in_path Ta string Ta "The path to redirect STDIN into"
+.It standard_out_path Ta string Ta "The path to redirect STDOUT into"
+.It title Ta string Ta "A one-line title to display"
+.It type Ta string Ta "The type of job"
+.It umask Ta string Ta "An octal value for umask(2)"
+.It user Ta string Ta "The username for setuid(2)"
+.It working_directory Ta string Ta "The path to set via chdir(2)"
+.It wait Ta boolean Ta "Wait for the job to finish?"
+
+.El
+There are additional sections:
+.Bl -column "----------" "-----------------"
+.It Sy Section Ta Sy Purpose Ta
+.It methods Ta "Shell scripts to manage the job"
+.It properties Ta "Variables that can be customized"
+.El
+.Sh FILES
+.Bl -tag -width "/etc/job.d/*XXXX" -compact
+.It Pa /etc/job.d/*
+The directory containing all enabled jobs.
+.El
+.Sh EXAMPLES
+.Bd -literal
+name = "rc"
+type = "task"
+after = ["sysctl"]
+wait = true
+standard_out_path = "/dev/console"
+standard_error_path = "/dev/console"
+
+[methods]
+start = "/bin/sh -x /etc/rc autoboot"
+stop = "/bin/sh -x /etc/rc.shutdown"
+
+[properties]
+enabled = true
+.Ed
+.\" .Sh ERRORS
+.Sh SEE ALSO
+.Xr job 8
+.Xr jobd 8
+.\" .Sh STANDARDS
+.\" .Sh HISTORY
+.\" .Sh AUTHORS
+.\" .Sh CAVEATS
+.\" .Sh BUGS
