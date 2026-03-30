@@ -21,8 +21,12 @@ serve as teaching moments about safety boundaries.
 |--------|-------|----------|
 | `hello_rust.rs` | Beginner | module! macro, params, KVec, pr_info |
 | `rust_chardev.rs` | Intermediate | MiscDevice, ioctl, Mutex, UserSlice, pin_init |
-| `rust_minimal.rs` | Beginner | Upstream sample — Vec, Module trait |
-| `rust_print.rs` | Beginner | Upstream sample — print macros, Arc |
+| `rust_minimal.rs` | Beginner | Upstream kernel sample (in `samples/rust/`, not `rust_learn/`) — Vec, Module trait |
+| `rust_print.rs` | Beginner | Upstream kernel sample (in `samples/rust/`, not `rust_learn/`) — print macros, Arc |
+
+**Naming convention:** New modules use the `rust_` prefix, matching the upstream
+kernel convention (`rust_minimal`, `rust_print`). The existing `hello_rust.rs` is
+the outlier.
 
 ## New Modules
 
@@ -36,6 +40,7 @@ serve as teaching moments about safety boundaries.
 - Shared ring buffer (fixed capacity, e.g. 64 entries) protected by SpinLock
 - Writer ioctl pushes u64 values into the ring buffer
 - Reader ioctl pops values, blocks via CondVar when buffer is empty
+  (note: CondVar API changed between 6.8–6.11; implementation targets ≥ 6.10)
 - Stats tracked via Arc-shared state: push count, pop count, high watermark
 - Drop drains and logs remaining items
 
@@ -57,6 +62,7 @@ serve as teaching moments about safety boundaries.
 
 **Behavior:**
 - Write to device queues a work item for asynchronous processing
+  (first module to implement both `write` and `ioctl` on MiscDevice)
 - Each work item logs a message, increments a completion counter
 - Ioctl returns count of completed work items
 - Module unload flushes all pending work cleanly
@@ -75,7 +81,7 @@ serve as teaching moments about safety boundaries.
 ### Module 3: `rust_procfs.rs` — Kernel Data via /proc
 
 **Subsystem:** Filesystem (procfs)
-**Complexity:** Medium-High
+**Complexity:** High (most FFI-heavy module — 4 callback function pointers for seq_file)
 **Interface:** `/proc/rust_procfs/stats` (read-only), `/proc/rust_procfs/config` (read-write)
 
 **Behavior:**
@@ -110,13 +116,14 @@ serve as teaching moments about safety boundaries.
   `/sys/bus/platform/drivers/.../bind|unbind`
 
 **Teaching points:**
-- `kernel::platform::Driver` trait (available since ~6.8)
+- `kernel::platform::Driver` trait (landed in 6.10, not 6.8 as initially proposed)
 - Driver lifecycle: probe vs init, remove vs drop
 - Per-device private data pattern
 - Simulated MMIO as stepping stone to real register I/O
 - sysfs-triggered device instantiation for testing without hardware
 
-**Kconfig:** `CONFIG_SAMPLE_RUST_PLATFORM`
+**Kconfig:** `CONFIG_SAMPLE_RUST_LEARN_PLATFORM`
+(prefixed `LEARN_` to avoid collision with upstream `CONFIG_SAMPLE_RUST_DRIVER_PLATFORM`)
 
 ---
 
@@ -132,12 +139,14 @@ serve as teaching moments about safety boundaries.
 - Ioctls: ALLOC (returns integer handle), FREE (by handle), STATS (active/total/highwater),
   FILL (writes payload into allocated handle)
 - Handle table: `KVec<Option<*mut Packet>>` protected by SpinLock
+- Handles use generation counters to prevent ABA/use-after-free on slot reuse
 - Module unload: frees all live objects, destroys cache, warns on leaks
 
 **Teaching points:**
 - Unsafe FFI for `kmem_cache_*` — the kernel's fast-path allocator
 - Object lifetime management: alloc/free pairing, leak detection
 - Handle-based API design (integer handles, not pointers — safe userspace boundary)
+- Generation counters on handles to prevent ABA problems after free/realloc
 - Why slab matters: same-size hot-cache vs generic kmalloc
 - SpinLock for concurrent access (builds on module 1)
 
@@ -156,8 +165,8 @@ serve as teaching moments about safety boundaries.
   `alloc_netdev`, `register_netdev`, `net_device_ops`
 - **TX path:** `ndo_start_xmit` receives sk_buffs, increments counters, loops back
   or drops depending on echo-mode flag
-- **RX path:** In echo mode, clones sk_buff, swaps src/dst MAC, re-injects via
-  `netif_rx` — complete TX→RX round trip visible from userspace
+- **RX path:** In echo mode, copies sk_buff via `skb_copy` (not `skb_clone` —
+  need writable data area to swap MACs), re-injects via `netif_rx`
 - **Stats:** `ndo_get_stats64` exposes tx/rx packets, bytes, drops
 - **Carrier control:** sysfs toggle simulates link up/down
   (`netif_carrier_on` / `netif_carrier_off`)
@@ -165,7 +174,7 @@ serve as teaching moments about safety boundaries.
 
 **Teaching points:**
 - `net_device` registration lifecycle — largest C-bridge in the series
-- sk_buff basics: head/data/tail/end, `skb_clone`, `skb_push`/`skb_pull`
+- sk_buff basics: head/data/tail/end, `skb_copy` vs `skb_clone`, `skb_push`/`skb_pull`
 - Why echo mode uses `netif_rx` rather than direct callback (NAPI context)
 - `net_device_ops` vtable: mapping C function pointers to Rust methods
 - Carrier state machine, queue start/stop
@@ -189,27 +198,43 @@ All 6 modules are added to:
 No new profiles or groups needed — these fit within the existing `rust-core`
 and `rust-all` groups.
 
+## Ioctl Command Allocation
+
+Each module uses magic character `'Q'` with non-overlapping command ranges:
+
+| Module | Range | Commands |
+|--------|-------|----------|
+| rust_chardev (existing) | 0x80–0x8F | HELLO, GET_COUNT |
+| rust_sync | 0x90–0x9F | PUSH, POP, STATS |
+| rust_workqueue | 0xA0–0xAF | GET_COMPLETED |
+| rust_platform | 0xB0–0xBF | REG_READ, REG_WRITE |
+| rust_slab | 0xC0–0xCF | ALLOC, FREE, FILL, STATS |
+
+Modules 3 and 6 use /proc and netdev interfaces respectively (no ioctls).
+
 ## Companion Files
 
 Each module includes:
 - Detailed doc-comments (`//!`) with usage instructions and expected output
 - Inline comments explaining every `unsafe` block's safety argument
-- Where applicable, a test script or C userspace helper in
-  `linux-lab/examples/rust/rust_learn/user/`
+- Where applicable, a shell test script in
+  `linux-lab/examples/rust/rust_learn/scripts/` (following existing
+  convention for quick-test helpers)
 
 ## Dependencies Between Modules
 
 ```
-rust_sync ──┬── rust_workqueue
-             │
-             ├── rust_procfs
-             │
-             ├── rust_slab
-             │
-             └── rust_netdev (uses spinlock, workqueue concepts,
-                              exposes stats via /proc pattern)
+rust_sync ──┬── rust_workqueue ───┐
+             │                     │
+             ├── rust_procfs ──────┤
+             │                     │
+             ├── rust_slab         │
+             │                     ▼
+             └──────────────── rust_netdev (uses spinlock from #1,
+                               workqueue patterns from #2,
+                               /proc stats pattern from #3)
 
-rust_platform (standalone, uses misc device from rust_chardev)
+rust_platform (standalone, uses misc device pattern from rust_chardev)
 ```
 
 Modules are independent at build time (no compile-time deps). The dependency
@@ -217,9 +242,13 @@ is conceptual — later modules assume familiarity with patterns from earlier on
 
 ## Target Kernels
 
-All modules target kernels with `CONFIG_RUST=y` support. Module 4
-(`rust_platform`) requires kernel ≥ 6.8 for `kernel::platform` bindings.
-Others work on any Rust-enabled kernel (≥ 6.1).
+All modules require kernel ≥ 6.10 with `CONFIG_RUST=y`. This floor is set by:
+- KVec API (introduced ~6.9)
+- MiscDevice trait rework (~6.10)
+- CondVar stable API (~6.10)
+- Platform driver Rust bindings (landed in 6.10)
+
+Earlier Rust-enabled kernels (6.1–6.9) have incompatible API surfaces.
 
 ## Testing Strategy
 
